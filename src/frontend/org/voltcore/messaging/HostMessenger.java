@@ -49,6 +49,7 @@ import org.voltcore.network.VoltNetworkPool;
 import org.voltcore.utils.COWMap;
 import org.voltcore.utils.CoreUtils;
 import org.voltcore.utils.InstanceId;
+import org.voltcore.utils.Pair;
 import org.voltcore.utils.PortGenerator;
 import org.voltcore.zk.CoreZK;
 import org.voltcore.zk.ZKUtil;
@@ -358,12 +359,13 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
      * and put it in the map of foreign hosts
      */
     @Override
-    public void notifyOfJoin(int hostId, SocketChannel socket, InetSocketAddress listeningAddress) {
+    public void notifyOfJoin(int hostId, SocketChannel readSocket, SocketChannel writeSocket, InetSocketAddress listeningAddress) {
         System.out.println(getHostId() + " notified of " + hostId);
-        prepSocketChannel(socket);
+        prepSocketChannel(readSocket);
+        prepSocketChannel(writeSocket);
         ForeignHost fhost = null;
         try {
-            fhost = new ForeignHost(this, hostId, socket, m_config.deadHostTimeout, listeningAddress);
+            fhost = new ForeignHost(this, hostId, readSocket, writeSocket, m_config.deadHostTimeout, listeningAddress);
             fhost.register(this);
             putForeignHost(hostId, fhost);
             fhost.enableRead();
@@ -406,19 +408,20 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
      * is done via ZK
      */
     @Override
-    public void requestJoin(SocketChannel socket, InetSocketAddress listeningAddress) throws Exception {
+    public void requestJoin(SocketChannel readSocket, SocketChannel writeSocket, InetSocketAddress listeningAddress) throws Exception {
         /*
          * Generate the host id via creating an ephemeral sequential node
          */
-        Integer hostId = selectNewHostId(socket.socket().getInetAddress().getHostAddress());
-        prepSocketChannel(socket);
+        Integer hostId = selectNewHostId(readSocket.socket().getInetAddress().getHostAddress());
+        prepSocketChannel(readSocket);
+        prepSocketChannel(writeSocket);
         ForeignHost fhost = null;
         try {
             try {
                 /*
                  * Write the response that advertises the cluster topology
                  */
-                writeRequestJoinResponse( hostId, socket);
+                writeRequestJoinResponse( hostId, readSocket);
 
                 /*
                  * Wait for the a response from the joining node saying that it connected
@@ -426,10 +429,10 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
                  * on failed joins.
                  */
                 ByteBuffer finishedJoining = ByteBuffer.allocate(1);
-                socket.configureBlocking(false);
+                readSocket.configureBlocking(false);
                 long start = System.currentTimeMillis();
                 while (finishedJoining.hasRemaining() && System.currentTimeMillis() - start < 120000) {
-                    int read = socket.read(finishedJoining);
+                    int read = readSocket.read(finishedJoining);
                     if (read == -1) {
                         hostLog.info("New connection was unable to establish mesh");
                         return;
@@ -441,7 +444,7 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
                 /*
                  * Now add the host to the mailbox system
                  */
-                fhost = new ForeignHost(this, hostId, socket, m_config.deadHostTimeout, listeningAddress);
+                fhost = new ForeignHost(this, hostId, readSocket, writeSocket, m_config.deadHostTimeout, listeningAddress);
                 fhost.register(this);
                 putForeignHost(hostId, fhost);
                 fhost.enableRead();
@@ -535,7 +538,7 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
     public void notifyOfHosts(
             int yourHostId,
             int[] hosts,
-            SocketChannel[] sockets,
+            List<Pair<SocketChannel, SocketChannel>> sockets,
             InetSocketAddress listeningAddresses[]) throws Exception {
         m_localHostId = yourHostId;
         long agreementHSId = getHSIdForLocalSite(AGREEMENT_SITE_ID);
@@ -551,10 +554,11 @@ public class HostMessenger implements SocketJoiner.JoinHandler, InterfaceToMesse
         for (int ii = 0; ii < hosts.length; ii++) {
             System.out.println(yourHostId + " Notified of host " + hosts[ii]);
             agreementSites.add(CoreUtils.getHSIdFromHostAndSite(hosts[ii], AGREEMENT_SITE_ID));
-            prepSocketChannel(sockets[ii]);
+            prepSocketChannel(sockets.get(ii).getFirst());
+            prepSocketChannel(sockets.get(ii).getSecond());
             ForeignHost fhost = null;
             try {
-                fhost = new ForeignHost(this, hosts[ii], sockets[ii], m_config.deadHostTimeout, listeningAddresses[ii]);
+                fhost = new ForeignHost(this, hosts[ii], sockets.get(ii).getFirst(), sockets.get(ii).getSecond(), m_config.deadHostTimeout, listeningAddresses[ii]);
                 fhost.register(this);
                 putForeignHost(hosts[ii], fhost);
             } catch (java.io.IOException e) {

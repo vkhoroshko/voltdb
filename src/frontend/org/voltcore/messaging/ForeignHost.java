@@ -24,31 +24,141 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import jsr166y.LinkedTransferQueue;
 
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.network.Connection;
 import org.voltcore.network.QueueMonitor;
 import org.voltcore.network.VoltProtocolHandler;
+import org.voltcore.utils.CoreUtils;
 import org.voltcore.utils.DeferredSerialization;
 import org.voltcore.utils.EstTime;
-import org.voltcore.utils.CoreUtils;
 
 public class ForeignHost {
     private static final VoltLogger hostLog = new VoltLogger("HOST");
 
     private Connection m_connection;
+    private Connection m_connection2;
     final FHInputHandler m_handler;
+    final FHInputHandler m_handler2;
     private final HostMessenger m_hostMessenger;
     final int m_hostId;
     final InetSocketAddress m_listeningAddress;
+    final LinkedTransferQueue<DeferredSerialization> outQueue = new LinkedTransferQueue<DeferredSerialization>();
+    private final Thread m_sendThread = new Thread() {
+
+        @Override
+        public void run() {
+            try {
+                m_writeSC.configureBlocking(true);
+                m_writeSocket.setTcpNoDelay(false);
+                while (true) {
+                    DeferredSerialization ds = outQueue.take();
+                    while (ds != null) {
+                        for (ByteBuffer b : ds.serialize()) {
+                           while (b.hasRemaining()) {
+                               m_writeSC.write(b);
+                           }
+                        }
+                        ds = outQueue.poll(500, TimeUnit.MICROSECONDS);
+                    }
+                }
+//                BufferedOutputStream bos = new BufferedOutputStream(m_socket.getOutputStream());
+//                while (true) {
+//                    DeferredSerialization ds = outQueue.take();
+//
+//                    while (ds != null) {
+//                        for (ByteBuffer b : ds.serialize()) {
+//                            System.out.println("Sending message " + b.remaining());
+//                            bos.write(b.array(), b.arrayOffset() + b.position(), b.remaining());
+//                        }
+//                        ds = outQueue.poll();
+//                    }
+//                    bos.flush();
+//                    System.out.println("Finished flush");
+//                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    };
+
+    private final Thread m_readThread = new Thread() {
+        @Override
+        public void run() {
+            try {
+                m_readSC.configureBlocking(true);
+                m_readSocket.setTcpNoDelay(false);
+                ByteBuffer lengthPrefixBuffer = ByteBuffer.allocateDirect(4);
+                boolean hadMessage = false;
+                while (true) {
+                    lengthPrefixBuffer.clear();
+                    final long startSpin = System.nanoTime();
+                    while (lengthPrefixBuffer.hasRemaining()) {
+                        final int read = m_readSC.read(lengthPrefixBuffer);
+                        if (read == 0) {
+                            final long now = System.nanoTime();
+                            if (now - startSpin > 500000) {
+                                hadMessage = false;
+                                m_readSC.configureBlocking(true);
+                            }
+                        }
+                    }
+                    lengthPrefixBuffer.flip();
+
+                    int nextLength = lengthPrefixBuffer.getInt();
+                    ByteBuffer message = ByteBuffer.allocate(nextLength);
+                    while (message.hasRemaining()) {
+                        m_readSC.read(message);
+                    }
+                    message.flip();
+                    handleRead( message, null);
+
+                    if (hadMessage) {
+                        hadMessage = true;
+                        m_readSC.configureBlocking(false);
+                    }
+                }
+//                BufferedInputStream bis = new BufferedInputStream(m_socket.getInputStream());
+//                ByteBuffer lengthPrefixBuffer = ByteBuffer.allocate(4);
+//                while (true) {
+//                    lengthPrefixBuffer.clear();
+//
+//                    int read = 0;
+//                    while (read < 4) {
+//                        int readThisTime = bis.read(lengthPrefixBuffer.array());
+//                        if (readThisTime == -1) return;
+//                        read += readThisTime;
+//                    }
+//
+//                    int nextLength = lengthPrefixBuffer.getInt();
+//                    System.out.println("Received message " + nextLength);
+//                    ByteBuffer message = ByteBuffer.allocate(nextLength);
+//                    read = 0;
+//                    while (read < nextLength) {
+//                        int readThisTime = bis.read(message.array(), read, nextLength - read);
+//                        if (readThisTime == -1) return;
+//                        read += readThisTime;
+//                    }
+//                    handleRead(message, null);
+//                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        };
+    };
 
     private final String m_remoteHostname = "UNKNOWN_HOSTNAME";
     private boolean m_closing;
     boolean m_isUp;
 
     // hold onto the socket so we can kill it
-    private final Socket m_socket;
-    private final SocketChannel m_sc;
+    private final Socket m_writeSocket;
+    private final SocketChannel m_writeSC;
+    private final Socket m_readSocket;
+    private final SocketChannel m_readSC;
 
     // Set the default here for TestMessaging, which currently has no VoltDB instance
     private final long m_deadHostTimeout;
@@ -100,30 +210,37 @@ public class ForeignHost {
     }
 
     /** Create a ForeignHost and install in VoltNetwork */
-    ForeignHost(HostMessenger host, int hostId, SocketChannel socket, int deadHostTimeout,
+    ForeignHost(HostMessenger host, int hostId, SocketChannel readSocket, SocketChannel writeSocket, int deadHostTimeout,
             InetSocketAddress listeningAddress)
     throws IOException
     {
         m_hostMessenger = host;
         m_handler = new FHInputHandler();
+        m_handler2 = new FHInputHandler();
         m_hostId = hostId;
         m_closing = false;
         m_isUp = true;
         m_lastMessageMillis = Long.MAX_VALUE;
-        m_sc = socket;
-        m_socket = socket.socket();
+        m_readSC = readSocket;
+        m_readSocket = readSocket.socket();
+        m_writeSC = writeSocket;
+        m_writeSocket = writeSocket.socket();
         m_deadHostTimeout = deadHostTimeout;
         m_listeningAddress = listeningAddress;
-        hostLog.info("Heartbeat timeout to host: " + m_socket.getRemoteSocketAddress() + " is " +
+        hostLog.info("Heartbeat timeout to host: " + m_readSocket.getRemoteSocketAddress() + " is " +
                          m_deadHostTimeout + " milliseconds");
     }
 
     public void register(HostMessenger host) throws IOException {
-        m_connection = host.getNetwork().registerChannel( m_sc, m_handler, 0);
+        m_connection = host.getNetwork().registerChannel( m_readSC, m_handler, 0);
+        m_connection2 = host.getNetwork().registerChannel( m_writeSC, m_handler2, 0);
     }
 
     public void enableRead() {
         m_connection.enableReadSelection();
+        m_connection2.enableReadSelection();
+//        m_readThread.start();
+//        m_sendThread.start();
     }
 
     synchronized void close()
@@ -141,10 +258,13 @@ public class ForeignHost {
     void killSocket() {
         try {
             m_closing = true;
-            m_socket.setKeepAlive(false);
-            m_socket.setSoLinger(false, 0);
+            m_readSocket.setKeepAlive(false);
+            m_readSocket.setSoLinger(false, 0);
+            m_writeSocket.setKeepAlive(false);
+            m_writeSocket.setSoLinger(false, 0);
             Thread.sleep(25);
-            m_socket.close();
+            m_readSocket.close();
+            m_writeSocket.close();
             Thread.sleep(25);
             System.gc();
             Thread.sleep(25);
@@ -180,35 +300,90 @@ public class ForeignHost {
         if (destinations.isEmpty()) {
             return;
         }
+        if (destinations.size() == 1) {
+        	Connection c;
+	        if (CoreUtils.getSiteIdFromHSId(destinations.get(0)) % 2 == 0) {
+	            c = m_connection;
+	        } else {
+	            c = m_connection2;
+	        }
+        	c.writeStream().enqueue(
+		            new DeferredSerialization() {
+		                @Override
+		                public final ByteBuffer[] serialize() throws IOException{
+		                    int len = 4            /* length prefix */
+		                            + 8            /* source hsid */
+		                            + 4            /* destinationCount */
+		                            + 8  /* destination list */
+		                            + message.getSerializedSize();
+		                    ByteBuffer buf = ByteBuffer.allocate(len);
+		                    buf.putInt(len - 4);
+		                    buf.putLong(message.m_sourceHSId);
+		                    buf.putInt(1);
+		                    buf.putLong(destinations.get(0));
+		                    try {
+		            			message.flattenToBuffer(buf);
+		            		} catch (IOException e) {
+		            			// TODO Auto-generated catch block
+		            			e.printStackTrace();
+		            		}
+		                    buf.flip();
+		                    return new ByteBuffer[] { buf };
+		                }
 
-        m_connection.writeStream().enqueue(
-            new DeferredSerialization() {
-                @Override
-                public final ByteBuffer[] serialize() throws IOException{
-                    int len = 4            /* length prefix */
-                            + 8            /* source hsid */
-                            + 4            /* destinationCount */
-                            + 8 * destinations.size()  /* destination list */
-                            + message.getSerializedSize();
-                    ByteBuffer buf = ByteBuffer.allocate(len);
-                    buf.putInt(len - 4);
-                    buf.putLong(message.m_sourceHSId);
-                    buf.putInt(destinations.size());
-                    for (int ii = 0; ii < destinations.size(); ii++) {
-                        buf.putLong(destinations.get(ii));
-                    }
-                    message.flattenToBuffer(buf);
-                    buf.flip();
-                    return new ByteBuffer[] { buf };
-                }
+		                @Override
+		                public final void cancel() {
+		                    /*
+		                     * Can this be removed?
+		                     */
+		                }
+		            });
+        } else {
+            int len = 4            /* length prefix */
+                    + 8            /* source hsid */
+                    + 4            /* destinationCount */
+                    + 8  /* destination list */
+                    + message.getSerializedSize();
+            ByteBuffer buf = ByteBuffer.allocate(len);
+            buf.putInt(len - 4);
+            buf.putLong(message.m_sourceHSId);
+            buf.putInt(1);
+            buf.putLong(destinations.get(0));
+            try {
+    			message.flattenToBuffer(buf);
+    		} catch (IOException e) {
+    			// TODO Auto-generated catch block
+    			e.printStackTrace();
+    		}
+            buf.flip();
+	        for (final Long destination : destinations) {
+	        	Connection c;
+		        if (CoreUtils.getSiteIdFromHSId(destination) % 2 == 0) {
+		            c = m_connection;
+		        } else {
+		            c = m_connection2;
+		        }
+		        final ByteBuffer copy = ByteBuffer.allocate(buf.remaining());
+		        copy.put(buf.duplicate());
+		        copy.putLong(16, destination);
+		        copy.flip();
+		        System.out.println("Sending message length " + copy.remaining());
+		        c.writeStream().enqueue(
+		            new DeferredSerialization() {
+		                @Override
+		                public final ByteBuffer[] serialize() throws IOException{
+		                	return new ByteBuffer[] { copy };
+		                }
 
-                @Override
-                public final void cancel() {
-                    /*
-                     * Can this be removed?
-                     */
-                }
-            });
+		                @Override
+		                public final void cancel() {
+		                    /*
+		                     * Can this be removed?
+		                     */
+		                }
+		            });
+	        }
+        }
 
         long current_time = EstTime.currentTimeMillis();
         long current_delta = current_time - m_lastMessageMillis;
@@ -243,7 +418,7 @@ public class ForeignHost {
             System.err.printf("Message (%s) sent to unknown site id: %s @ (%s) at " +
                     m_hostMessenger.getHostId() + " from " + CoreUtils.hsIdToString(message.m_sourceHSId) + "\n",
                     message.getClass().getSimpleName(),
-                    CoreUtils.hsIdToString(destinationHSId), m_socket.getRemoteSocketAddress().toString());
+                    CoreUtils.hsIdToString(destinationHSId), m_readSocket.getRemoteSocketAddress().toString());
             /*
              * If it is for the wrong host, that definitely isn't cool
              */

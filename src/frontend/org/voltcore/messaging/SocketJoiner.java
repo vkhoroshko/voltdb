@@ -42,6 +42,7 @@ import org.json_voltpatches.JSONArray;
 import org.json_voltpatches.JSONObject;
 import org.voltcore.logging.Level;
 import org.voltcore.logging.VoltLogger;
+import org.voltcore.utils.Pair;
 
 /**
  * SocketJoiner runs all the time listening for new nodes in the cluster. Since it is a dedicated thread
@@ -64,12 +65,12 @@ public class SocketJoiner {
         /*
          * Notify that a specific host has joined with the specified host id.
          */
-        public void notifyOfJoin(int hostId, SocketChannel socket, InetSocketAddress listeningAddress);
+        public void notifyOfJoin(int hostId, SocketChannel readSocket, SocketChannel writeSocket, InetSocketAddress listeningAddress);
 
         /*
          * A node wants to join the socket mesh
          */
-        public void requestJoin(SocketChannel socket, InetSocketAddress listeningAddress ) throws Exception;
+        public void requestJoin(SocketChannel readSocket, SocketChannel writeSocket, InetSocketAddress listeningAddress ) throws Exception;
 
         /*
          * A connection has been made to all of the specified hosts. Invoked by
@@ -78,7 +79,7 @@ public class SocketJoiner {
         public void notifyOfHosts(
                 int yourLocalHostId,
                 int hosts[],
-                SocketChannel sockets[],
+                List<Pair<SocketChannel, SocketChannel>> sockets,
                 InetSocketAddress listeningAddresses[]) throws Exception;
     }
 
@@ -265,6 +266,10 @@ public class SocketJoiner {
     private void processSSC(ServerSocketChannel ssc) throws Exception {
         SocketChannel sc = null;
         while ((sc = ssc.accept()) != null) {
+            SocketChannel scWrite = null;
+            while (scWrite == null) {
+                scWrite = ssc.accept();
+            }
             sc.socket().setTcpNoDelay(true);
             sc.socket().setPerformancePreferences(0, 2, 1);
             final String remoteAddress = sc.socket().getRemoteSocketAddress().toString();
@@ -319,9 +324,9 @@ public class SocketJoiner {
 
             hostLog.info("Received request type " + type);
             if (type.equals("REQUEST_HOSTID")) {
-                m_joinHandler.requestJoin( sc, listeningAddress);
+                m_joinHandler.requestJoin( sc, scWrite, listeningAddress);
             } else if (type.equals("PUBLISH_HOSTID")){
-                m_joinHandler.notifyOfJoin(jsObj.getInt("hostId"), sc, listeningAddress);
+                m_joinHandler.notifyOfJoin(jsObj.getInt("hostId"), sc, scWrite, listeningAddress);
             } else {
                 throw new RuntimeException("Unexpected message type " + type + " from " + remoteAddress);
             }
@@ -381,6 +386,7 @@ public class SocketJoiner {
      */
     private void connectToPrimary() {
         SocketChannel socket = null;
+        SocketChannel readSocket = null;
         try {
             LOG.debug("Non-Primary Starting");
             LOG.debug("Non-Primary Connecting to Primary");
@@ -399,8 +405,9 @@ public class SocketJoiner {
                     }
                 }
             }
+            readSocket = SocketChannel.open(m_coordIp);
             socket.socket().setTcpNoDelay(true);
-            socket.socket().setPerformancePreferences(0, 2, 1);
+//            socket.socket().setPerformancePreferences(0, 2, 1);
 
             JSONObject jsObj = new JSONObject();
             jsObj.put("type", "REQUEST_HOSTID");
@@ -445,6 +452,7 @@ public class SocketJoiner {
                 }
             }
             String jsonString = new String(responseBuffer.array(), "UTF-8");
+            System.out.println("String is " + jsonString);
             JSONObject jsonObj = new JSONObject(jsonString);
 
             /*
@@ -460,7 +468,7 @@ public class SocketJoiner {
              */
             JSONArray otherHosts = jsonObj.getJSONArray("hosts");
             int hostIds[] = new int[otherHosts.length()];
-            SocketChannel hostSockets[] = new SocketChannel[hostIds.length];
+            ArrayList<Pair<SocketChannel, SocketChannel>> hostSockets = new ArrayList<Pair<SocketChannel, SocketChannel>>();
             InetSocketAddress listeningAddresses[] = new InetSocketAddress[hostIds.length];
 
             for (int ii = 0; ii < otherHosts.length(); ii++) {
@@ -475,14 +483,16 @@ public class SocketJoiner {
                     //Leader already has a socket
                     hostIds[ii] = hostId;
                     listeningAddresses[ii] = hostAddr;
-                    hostSockets[ii] = socket;
+                    hostSockets.add(Pair.of(readSocket, socket));
                     continue;
                 }
 
                 SocketChannel hostSocket = null;
+                SocketChannel readSocket2 = null;
                 while (hostSocket == null) {
                     try {
                         hostSocket = SocketChannel.open(hostAddr);
+                        readSocket2 = SocketChannel.open(hostAddr);
                     }
                     catch (java.net.ConnectException e) {
                         LOG.warn("Joining primary failed: " + e.getMessage() + " retrying..");
@@ -511,7 +521,7 @@ public class SocketJoiner {
                     hostSocket.write(pushHostId);
                 }
                 hostIds[ii] = hostId;
-                hostSockets[ii] = hostSocket;
+                hostSockets.add(Pair.of( readSocket2, hostSocket));
                 listeningAddresses[ii] = hostAddr;
             }
 
@@ -521,7 +531,7 @@ public class SocketJoiner {
              */
             ByteBuffer joinCompleteBuffer = ByteBuffer.allocate(1);
             while (joinCompleteBuffer.hasRemaining()) {
-                hostSockets[0].write(joinCompleteBuffer);
+                hostSockets.get(0).getSecond().write(joinCompleteBuffer);
             }
 
             /*
