@@ -103,7 +103,7 @@ public class SpScheduler extends Scheduler
     // from local work, but will come from replicas when replication is
     // implemented
     @Override
-    public void deliver(VoltMessage message)
+    public void deliver(final VoltMessage message)
     {
         if (message instanceof Iv2InitiateTaskMessage) {
             handleIv2InitiateTaskMessage((Iv2InitiateTaskMessage)message);
@@ -284,12 +284,14 @@ public class SpScheduler extends Scheduler
             else if (result == DuplicateCounter.MISMATCH) {
                 VoltDB.crashLocalVoltDB("HASH MISMATCH: replicas produced different results.", true, null);
             }
+            m_pendingTasks.flush();
             // doing duplicate suppresion: all done.
             return;
         }
 
         // the initiatorHSId is the ClientInterface mailbox. Yeah. I know.
         m_repairLogTruncationHandle = spHandle;
+        m_pendingTasks.flush();
         m_mailbox.send(message.getInitiatorHSId(), message);
     }
 
@@ -430,10 +432,11 @@ public class SpScheduler extends Scheduler
             else if (result == DuplicateCounter.MISMATCH) {
                 VoltDB.crashLocalVoltDB("HASH MISMATCH running every-site system procedure.", true, null);
             }
+            m_pendingTasks.flush();
             // doing duplicate suppresion: all done.
             return;
         }
-
+        m_pendingTasks.flush();
         m_mailbox.send(message.getDestinationSiteId(), message);
     }
 
@@ -454,6 +457,7 @@ public class SpScheduler extends Scheduler
                 new CompleteTransactionTask(txn, m_pendingTasks, message);
             m_pendingTasks.offer(task);
         }
+        m_pendingTasks.flush();
     }
 
     @Override

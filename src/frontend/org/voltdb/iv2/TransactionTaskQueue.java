@@ -20,6 +20,7 @@ package org.voltdb.iv2;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Iterator;
+import java.util.Queue;
 
 import org.voltcore.logging.VoltLogger;
 import org.voltdb.exceptions.SerializableException;
@@ -33,10 +34,15 @@ public class TransactionTaskQueue
     final private Deque<TransactionTask> m_backlog =
         new ArrayDeque<TransactionTask>();
     final private SiteTaskerQueue m_taskQueue;
+    private Queue<Runnable> m_externalQueue;
 
     TransactionTaskQueue(SiteTaskerQueue queue)
     {
         m_taskQueue = queue;
+    }
+
+    public void setQueue(Queue<Runnable> externalQueue) {
+        m_externalQueue = externalQueue;
     }
 
     /**
@@ -46,7 +52,7 @@ public class TransactionTaskQueue
      * @param task
      * @return true if this task was stored, false if not
      */
-    synchronized boolean offer(TransactionTask task)
+    boolean offer(TransactionTask task)
     {
         Iv2Trace.logTransactionTaskQueueOffer(task);
         boolean retval = false;
@@ -80,7 +86,7 @@ public class TransactionTaskQueue
     // SiteTaskerQueue.  Before it does this, it unblocks the MP transaction
     // that may be running in the Site thread and causes it to rollback by
     // faking an unsuccessful FragmentResponseMessage.
-    synchronized void repair(SiteTasker task)
+    void repair(SiteTasker task)
     {
         m_taskQueue.offer(task);
         if (!m_backlog.isEmpty()) {
@@ -113,7 +119,7 @@ public class TransactionTaskQueue
      * Currently just blocks on the next uncompleted multipartition transaction
      * @return
      */
-    synchronized int flush()
+    int flush()
     {
         int offered = 0;
         // check to see if head is done
@@ -154,11 +160,20 @@ public class TransactionTaskQueue
         return offered;
     }
 
+    public void externalFlush() {
+        m_externalQueue.offer(new Runnable() {
+            @Override
+            public void run() {
+                flush();
+            }
+        });
+    }
+
     /**
      * How many Tasks are un-runnable?
      * @return
      */
-    synchronized int size()
+    int size()
     {
         return m_backlog.size();
     }

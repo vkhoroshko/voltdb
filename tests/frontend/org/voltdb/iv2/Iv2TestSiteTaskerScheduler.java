@@ -23,13 +23,10 @@
 
 package org.voltdb.iv2;
 
-import org.junit.Test;
-
-import org.voltdb.SiteProcedureConnection;
-import org.voltdb.iv2.SiteTasker;
-import org.voltdb.iv2.SiteTaskerQueue;
-
 import junit.framework.TestCase;
+
+import org.junit.Test;
+import org.voltdb.SiteProcedureConnection;
 
 public class Iv2TestSiteTaskerScheduler extends TestCase
 {
@@ -74,28 +71,28 @@ public class Iv2TestSiteTaskerScheduler extends TestCase
         SiteTasker r = sts.poll();
         assertTrue("Round trip one task", r == t1);
     }
-
-    @Test
-    public void testComparator()
-    {
-        SiteTaskerQueue.TaskComparator cmp =
-            new SiteTaskerQueue.TaskComparator();
-
-        Task p1 = new Task(1);
-        p1.setSeq(0);
-
-        Task p2 = new Task(2);
-        p2.setSeq(1);
-
-        Task p3 = new Task(1);
-        p3.setSeq(2);
-
-        assertTrue("1 = 1", cmp.compare(p1, p1) == 0);
-        assertTrue("1 < 2", cmp.compare(p1, p2) < 0);
-        assertTrue("2 > 1", cmp.compare(p2, p1) > 0);
-        assertTrue("Seq order", cmp.compare(p1, p3) < 0);
-        assertTrue("Seq order-1", cmp.compare(p3, p1) > 0);
-    }
+//
+//    @Test
+//    public void testComparator()
+//    {
+//        SiteTaskerQueue.TaskComparator cmp =
+//            new SiteTaskerQueue.TaskComparator();
+//
+//        Task p1 = new Task(1);
+//        p1.setSeq(0);
+//
+//        Task p2 = new Task(2);
+//        p2.setSeq(1);
+//
+//        Task p3 = new Task(1);
+//        p3.setSeq(2);
+//
+//        assertTrue("1 = 1", cmp.compare(p1, p1) == 0);
+//        assertTrue("1 < 2", cmp.compare(p1, p2) < 0);
+//        assertTrue("2 > 1", cmp.compare(p2, p1) > 0);
+//        assertTrue("Seq order", cmp.compare(p1, p3) < 0);
+//        assertTrue("Seq order-1", cmp.compare(p3, p1) > 0);
+//    }
 
 
     @Test

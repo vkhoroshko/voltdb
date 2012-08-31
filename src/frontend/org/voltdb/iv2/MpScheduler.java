@@ -52,7 +52,6 @@ public class MpScheduler extends Scheduler
 
     // the current not-needed-any-more point of the repair log.
     long m_repairLogTruncationHandle = Long.MIN_VALUE;
-    private CommandLog m_cl;
 
     MpScheduler(int partitionId, long buddyHSId, SiteTaskerQueue taskQueue)
     {
@@ -150,7 +149,7 @@ public class MpScheduler extends Scheduler
     }
 
     @Override
-    public void deliver(VoltMessage message)
+    public void deliver(final VoltMessage message)
     {
         if (message instanceof Iv2InitiateTaskMessage) {
             handleIv2InitiateTaskMessage((Iv2InitiateTaskMessage)message);
@@ -314,6 +313,5 @@ public class MpScheduler extends Scheduler
 
     @Override
     public void setCommandLog(CommandLog cl) {
-        m_cl = cl;
     }
 }

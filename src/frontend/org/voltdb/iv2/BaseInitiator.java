@@ -73,7 +73,7 @@ public abstract class BaseInitiator implements Initiator
         m_messenger.createMailbox(null, m_initiatorMailbox);
         rejoinProducer.setMailbox(m_initiatorMailbox);
         m_scheduler.setMailbox(m_initiatorMailbox);
-
+        m_scheduler.setExternalQueue(m_initiatorMailbox.m_taskQueue);
         String partitionString = " ";
         if (m_partitionId != -1) {
             partitionString = " for partition " + m_partitionId + " ";

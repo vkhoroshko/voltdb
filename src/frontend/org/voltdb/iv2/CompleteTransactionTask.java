@@ -45,7 +45,7 @@ public class CompleteTransactionTask extends TransactionTask
             siteConnection.truncateUndoLog(m_msg.isRollback(), m_txn.getBeginUndoToken(), m_txn.txnId, m_txn.spHandle);
         }
         m_txn.setDone();
-        m_queue.flush();
+        m_queue.externalFlush();
         hostLog.debug("COMPLETE: " + this);
     }
 
@@ -54,7 +54,7 @@ public class CompleteTransactionTask extends TransactionTask
     {
         // future: offer to siteConnection.IBS for replay.
         m_txn.setDone();
-        m_queue.flush();
+        m_queue.externalFlush();
     }
 
     @Override

@@ -18,6 +18,7 @@
 package org.voltdb.iv2;
 
 import java.util.List;
+import java.util.Queue;
 
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.Mailbox;
@@ -61,6 +62,10 @@ abstract public class Scheduler implements InitiatorMessageHandler
         m_tasks = taskQueue;
         m_pendingTasks = new TransactionTaskQueue(m_tasks);
         m_txnEgo = TxnEgo.makeZero(partitionId);
+    }
+
+    void setExternalQueue(Queue<Runnable> q) {
+        m_pendingTasks.setQueue(q);
     }
 
     final public void setMaxSeenTxnId(long maxSeenTxnId)

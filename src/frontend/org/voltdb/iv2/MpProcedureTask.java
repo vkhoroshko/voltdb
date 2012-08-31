@@ -22,7 +22,6 @@ import java.util.List;
 import org.voltcore.logging.Level;
 import org.voltcore.messaging.Mailbox;
 import org.voltcore.utils.CoreUtils;
-import org.voltdb.ProcedureRunner;
 import org.voltdb.SiteProcedureConnection;
 import org.voltdb.messaging.CompleteTransactionMessage;
 import org.voltdb.messaging.InitiateResponseMessage;
@@ -92,7 +91,7 @@ public class MpProcedureTask extends ProcedureTask
         complete.setTruncationHandle(m_msg.getTruncationHandle());
         m_initiator.send(m_initiatorHSIds, complete);
         m_txn.setDone();
-        m_queue.flush();
+        m_queue.externalFlush();
     }
 
     @Override

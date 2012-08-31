@@ -19,7 +19,12 @@ package org.voltdb.iv2;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+
+import jsr166y.LinkedTransferQueue;
 
 import org.voltcore.logging.VoltLogger;
 import org.voltcore.messaging.HostMessenger;
@@ -57,18 +62,52 @@ public class InitiatorMailbox implements Mailbox
     private RepairAlgo m_algo;
 
     // hacky temp txnid
-    AtomicLong m_txnId = new AtomicLong(0);
+    long m_txnId = 0;
 
-    synchronized public void setRepairAlgo(RepairAlgo algo)
+
+    private final ExecutorService m_es = Executors.newSingleThreadExecutor();
+    final LinkedTransferQueue<Runnable> m_taskQueue = new LinkedTransferQueue<Runnable>();
+
+    public void setRepairAlgo(final RepairAlgo algo)
     {
-        m_algo = algo;
+        FutureTask<Object> ft = new FutureTask<Object>(new Runnable() {
+            @Override
+            public void run() {
+                m_algo = algo;
+            }
+        }, null);
+        m_taskQueue.offer(ft);
+        try {
+            ft.get();
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
     }
 
-    synchronized public void setLeaderState(long maxSeenTxnId)
+    public void setLeaderState(final long maxSeenTxnId)
     {
-        m_repairLog.setLeaderState(true);
-        m_scheduler.setMaxSeenTxnId(maxSeenTxnId);
-        m_scheduler.setLeaderState(true);
+        FutureTask<Object> ft = new FutureTask<Object>(new Runnable() {
+            @Override
+            public void run() {
+                m_repairLog.setLeaderState(true);
+                m_scheduler.setMaxSeenTxnId(maxSeenTxnId);
+                m_scheduler.setLeaderState(true);
+            }
+        }, null);
+        m_taskQueue.offer(ft);
+        try {
+            ft.get();
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
     }
 
     public InitiatorMailbox(int partitionId,
@@ -91,27 +130,68 @@ public class InitiatorMailbox implements Mailbox
             // this on the other hand seems tragic.
             VoltDB.crashLocalVoltDB("Error constructiong InitiatorMailbox.", false, crashme);
         }
+        m_es.submit(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    while (true) {
+                        m_taskQueue.take().run();
+                    }
+                } catch (Exception e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+            }
+        });
     }
 
-    synchronized public void shutdown() throws InterruptedException
+    public void shutdown() throws InterruptedException
     {
-        m_masterLeaderCache.shutdown();
-        if (m_algo != null) {
-            m_algo.cancel();
-        }
-        m_scheduler.shutdown();
+        m_taskQueue.offer(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    m_masterLeaderCache.shutdown();
+                } catch (InterruptedException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+                if (m_algo != null) {
+                    m_algo.cancel();
+                }
+                m_scheduler.shutdown();
+                throw new RuntimeException();
+            }
+        });
+        m_es.shutdown();
+        m_es.awaitTermination(356, TimeUnit.DAYS);
     }
 
     // Change the replica set configuration (during or after promotion)
-    public synchronized void updateReplicas(List<Long> replicas)
+    public void updateReplicas(final List<Long> replicas)
     {
-        Iv2Trace.logTopology(getHSId(), replicas, m_partitionId);
-        // If a replica set has been configured and it changed during
-        // promotion, must cancel the term
-        if (m_algo != null) {
-            m_algo.cancel();
+        FutureTask<Object> ft = new FutureTask<Object>(new Runnable() {
+            @Override
+            public void run() {
+                Iv2Trace.logTopology(getHSId(), replicas, m_partitionId);
+                // If a replica set has been configured and it changed during
+                // promotion, must cancel the term
+                if (m_algo != null) {
+                    m_algo.cancel();
+                }
+                m_scheduler.updateReplicas(replicas);
+            }
+        }, null);
+        m_taskQueue.offer(ft);
+        try {
+            ft.get();
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
         }
-        m_scheduler.updateReplicas(replicas);
     }
 
     public long getMasterHsId(int partitionId)
@@ -137,23 +217,28 @@ public class InitiatorMailbox implements Mailbox
     }
 
     @Override
-    public synchronized void deliver(VoltMessage message)
+    public void deliver(final VoltMessage message)
     {
-        logRxMessage(message);
-        if (message instanceof Iv2RepairLogRequestMessage) {
-            handleLogRequest(message);
-            return;
-        }
-        else if (message instanceof Iv2RepairLogResponseMessage) {
-            m_algo.deliver(message);
-            return;
-        }
-        else if (message instanceof RejoinMessage) {
-            m_rejoinProducer.deliver((RejoinMessage)message);
-            return;
-        }
-        m_repairLog.deliver(message);
-        m_scheduler.deliver(message);
+        m_taskQueue.offer(new Runnable() {
+            @Override
+            public void run() {
+                logRxMessage(message);
+                if (message instanceof Iv2RepairLogRequestMessage) {
+                    handleLogRequest(message);
+                    return;
+                }
+                else if (message instanceof Iv2RepairLogResponseMessage) {
+                    m_algo.deliver(message);
+                    return;
+                }
+                else if (message instanceof RejoinMessage) {
+                    m_rejoinProducer.deliver((RejoinMessage)message);
+                    return;
+                }
+                m_repairLog.deliver(message);
+                m_scheduler.deliver(message);
+            }
+        });
     }
 
     @Override
