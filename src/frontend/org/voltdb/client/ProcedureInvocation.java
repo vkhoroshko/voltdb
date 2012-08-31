@@ -77,6 +77,10 @@ public class ProcedureInvocation {
         return size;
     }
 
+    public Integer getHashinatedFirstParam() {
+        return m_parameters.getHashinatedFirstParam();
+    }
+
     public ByteBuffer flattenToBuffer(ByteBuffer buf) throws IOException {
         buf.put(m_type.getValue());//Version
         if (m_type == ProcedureInvocationType.REPLICATED) {

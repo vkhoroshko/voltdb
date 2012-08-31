@@ -156,7 +156,7 @@ class VoltNetwork implements Runnable
             final int interestOps) throws IOException {
         channel.configureBlocking (false);
         channel.socket().setKeepAlive(true);
-
+        channel.socket().setTcpNoDelay(true);
         Callable<Connection> registerTask = new Callable<Connection>() {
             @Override
             public Connection call() throws Exception {

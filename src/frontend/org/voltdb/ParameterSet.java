@@ -799,4 +799,11 @@ import org.voltdb.types.VoltDecimalHelper;
         }
         return micros;
     }
+
+    public Integer getHashinatedFirstParam() {
+        if (m_params.length > 0) {
+            return TheHashinator.hashToPartition(m_params[0]);
+        }
+        return null;
+    }
 }

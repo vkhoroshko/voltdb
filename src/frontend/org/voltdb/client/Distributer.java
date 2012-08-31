@@ -43,6 +43,8 @@ import org.voltcore.network.VoltProtocolHandler;
 import org.voltcore.utils.CoreUtils;
 import org.voltcore.utils.Pair;
 import org.voltdb.ClientResponseImpl;
+import org.voltdb.ParameterSet;
+import org.voltdb.TheHashinator;
 import org.voltdb.VoltTable;
 import org.voltdb.client.ClientStatusListenerExt.DisconnectCause;
 
@@ -55,6 +57,7 @@ import org.voltdb.client.ClientStatusListenerExt.DisconnectCause;
 class Distributer {
 
     static final long PING_HANDLE = Long.MAX_VALUE;
+    static final long TOPOLOGY_HANDLE = Long.MAX_VALUE - 1;
 
     // collection of connections to the cluster
     private final CopyOnWriteArrayList<NodeConnection> m_connections =
@@ -69,6 +72,11 @@ class Distributer {
     private int m_nextConnection = 0;
 
     private final boolean m_useMultipleThreads;
+    private final boolean m_useClientAffinity;
+
+    private final Map<Integer, NodeConnection> m_partitionMasters = new HashMap<Integer, NodeConnection>();
+    private final Map<Integer, NodeConnection> m_hostIdToConnection = new HashMap<Integer, NodeConnection>();
+    private boolean m_hashinatorInitialized = false;
 
     // timeout for individual procedure calls
     private final long m_procedureCallTimeoutMS;
@@ -304,6 +312,17 @@ class Distributer {
                 }
             }
 
+            if (response.getClientHandle() == TOPOLOGY_HANDLE) {
+                m_callbacksToInvoke.decrementAndGet();
+                synchronized (Distributer.this) {
+                    VoltTable results[] = response.getResults();
+                    if (results != null && results.length == 1) {
+                        VoltTable vt = results[0];
+                        updateAffinityTopology(vt);
+                    }
+                }
+            }
+
             if (cb != null) {
                 response.setClientRoundtrip(delta);
                 try {
@@ -423,13 +442,15 @@ class Distributer {
     Distributer() {
         this( false,
                 ClientConfig.DEFAULT_PROCEDURE_TIMOUT_MS,
-                ClientConfig.DEFAULT_CONNECTION_TIMOUT_MS);
+                ClientConfig.DEFAULT_CONNECTION_TIMOUT_MS,
+                false);
     }
 
     Distributer(
             boolean useMultipleThreads,
             long procedureCallTimeoutMS,
-            long connectionResponseTimeoutMS) {
+            long connectionResponseTimeoutMS,
+            boolean useClientAffinity) {
         m_useMultipleThreads = useMultipleThreads;
         m_network = new VoltNetworkPool(
                 m_useMultipleThreads ? Math.max(2, CoreUtils.availableProcessors()) / 4 : 1,
@@ -437,6 +458,7 @@ class Distributer {
         m_network.start();
         m_procedureCallTimeoutMS = procedureCallTimeoutMS;
         m_connectionResponseTimeoutMS = connectionResponseTimeoutMS;
+        m_useClientAffinity = useClientAffinity;
 
         // schedule the task that looks for timed-out proc calls and connections
         m_timeoutReaperHandle = m_ex.scheduleAtFixedRate(new CallExpiration(), 1, 1, TimeUnit.SECONDS);
@@ -457,6 +479,7 @@ class Distributer {
         InetSocketAddress address = new InetSocketAddress(host, port);
         final SocketChannel aChannel = (SocketChannel)socketChannelAndInstanceIdAndBuildString[0];
         final long instanceIdWhichIsTimestampAndLeaderIp[] = (long[])socketChannelAndInstanceIdAndBuildString[1];
+        final int hostId = (int)instanceIdWhichIsTimestampAndLeaderIp[0];
         if (m_clusterInstanceId == null) {
             long timestamp = instanceIdWhichIsTimestampAndLeaderIp[2];
             int addr = (int)instanceIdWhichIsTimestampAndLeaderIp[3];
@@ -477,6 +500,13 @@ class Distributer {
         cxn.m_hostname = c.getHostnameOrIP();
         cxn.m_port = port;
         cxn.m_connection = c;
+
+        if (m_useClientAffinity) {
+            ProcedureInvocation spi = new ProcedureInvocation( TOPOLOGY_HANDLE, "@Statistics", "TOPO", 0);
+            //The handle is specific to topology updates and has special cased handling
+            queue(spi, null, true);
+            m_hostIdToConnection.put(hostId, cxn);
+        }
     }
 
     //    private HashMap<String, Long> reportedSizes = new HashMap<String, Long>();
@@ -499,6 +529,11 @@ class Distributer {
         boolean backpressure = true;
 
         /*
+         * Only attempt hashing if the function is actually known
+         */
+        Integer hashedPartition = m_hashinatorInitialized ? invocation.getHashinatedFirstParam() : null;
+
+        /*
          * Synchronization is necessary to ensure that m_connections is not modified
          * as well as to ensure that backpressure is reported correctly
          */
@@ -509,12 +544,23 @@ class Distributer {
                 throw new NoConnectionsException("No connections.");
             }
 
-            for (int i=0; i < totalConnections; ++i) {
-                cxn = m_connections.get(Math.abs(++m_nextConnection % totalConnections));
-                if (!cxn.hadBackPressure() || ignoreBackpressure) {
-                    // serialize and queue the invocation
-                    backpressure = false;
-                    break;
+            /*
+             * Check if the master for the partition is known. No back pressure check to ensure correct
+             * routing, but backpressure will be managed anyways.
+             */
+            if (m_useClientAffinity && hashedPartition != null && m_partitionMasters.containsKey(hashedPartition)) {
+                cxn = m_partitionMasters.get(hashedPartition);
+                backpressure = false;
+            }
+
+            if (cxn == null) {
+                for (int i=0; i < totalConnections; ++i) {
+                    cxn = m_connections.get(Math.abs(++m_nextConnection % totalConnections));
+                    if (!cxn.hadBackPressure() || ignoreBackpressure) {
+                        // serialize and queue the invocation
+                        backpressure = false;
+                        break;
+                    }
                 }
             }
 
@@ -644,4 +690,20 @@ class Distributer {
     public List<Long> getThreadIds() {
         return m_network.getThreadIds();
     }
+
+    private void updateAffinityTopology(VoltTable vt) {
+        System.out.println(vt);
+        int numPartitions = vt.getRowCount();
+        TheHashinator.initialize(numPartitions);
+        m_hashinatorInitialized = true;
+        m_partitionMasters.clear();
+        while (vt.advanceRow()) {
+            Integer partition = (int)vt.getLong("Partition");
+            Integer leaderHostId = Integer.valueOf(vt.getString("Leader").split(":")[0]);
+            if (m_hostIdToConnection.containsKey(leaderHostId)) {
+                m_partitionMasters.put(partition, m_hostIdToConnection.get(leaderHostId));
+            }
+        }
+    }
+
 }

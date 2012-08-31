@@ -41,6 +41,7 @@ import org.junit.runners.Parameterized.Parameters;
 import org.junit.Test;
 import org.voltdb.VoltDB.Configuration;
 import org.voltdb.client.Client;
+import org.voltdb.client.ClientConfig;
 import org.voltdb.client.ClientFactory;
 import org.voltdb.client.NoConnectionsException;
 import org.voltdb.client.ProcCallException;
@@ -79,7 +80,10 @@ public class TestAdHocQueries extends AdHocQueryTester {
             localServer.waitForInitialization();
 
             // do the test
-            m_client = ClientFactory.createClient();
+            ClientConfig clientConfig = new ClientConfig();
+            clientConfig.enableClientAffinity();
+
+            m_client = ClientFactory.createClient(clientConfig);
             m_client.createConnection("localhost", config.m_port);
 
             m_client.callProcedure("@AdHoc", "insert into PARTED1 values ( 23, 3 )");
