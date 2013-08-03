@@ -29,6 +29,7 @@ import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
@@ -677,6 +678,19 @@ public class RealVoltDB implements VoltDBInterface, RestoreAgent.Callback
                 }
             } catch (Exception e) {
                 //JMXStatsManager will log and we continue.
+            }
+
+            try {
+                System.out.println("Finding out if Relic is ON");
+                final Class<?> nrClass = Class.forName("com.voltdb.newrelic.stats.VoltDBMonitor");
+                if (nrClass != null) {
+                    Object o = nrClass.newInstance();
+                    Method m = nrClass.getDeclaredMethod("initialize", null);
+                    m.invoke(o, null);
+                }
+                System.out.println("Relic is ON");
+            } catch (Exception ex) {
+                System.out.println(ex);
             }
 
             try {
