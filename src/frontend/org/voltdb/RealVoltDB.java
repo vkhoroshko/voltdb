@@ -675,14 +675,14 @@ public class RealVoltDB implements VoltDBInterface, RestoreAgent.Callback
                 if (statsManagerClass != null) {
                     m_statsManager = (StatsManager)statsManagerClass.newInstance();
                     m_statsManager.initialize();
-                    System.out.println("Checking if New Relic Can be turned ON.");
+                    hostLog.info("Checking if New Relic Can be turned ON.");
                     final Class<?> nrClass = Class.forName("org.voltdb.newrelic.stats.VoltDBMonitor");
                     if (nrClass != null) {
                         Object o = nrClass.newInstance();
                         Method m = nrClass.getDeclaredMethod("initialize", null);
                         m.invoke(o, null);
+                        hostLog.info("New Relic is ON");
                     }
-                    System.out.println("New Relic is ON");
                 }
             } catch (Exception e) {
                 //JMXStatsManager will log and we continue.
