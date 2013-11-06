@@ -94,4 +94,19 @@
                                   "ddl": "compoundex-DDL.sql",
                                   "template": "advanced-joins.sql",
                                   "normalizer": "normalizer.py"},
+    "regression-basic-matview": {"schema": "matview-basic-schema.py",
+        "ddl": "matview-DDL.sql",
+        "template": "regression-basic-matview.sql",
+        "normalizer": "normalizer.py"},
+
+    # ADVANCED MATERIALIZED VIEW TESTING, INCLUDING COMPLEX GROUP BY AND AGGREGATIONS.
+    "advanced-matview-nonjoin": {"schema": "matview-advanced-nonjoin-schema.py",
+        "ddl": "matview-DDL.sql",
+        "template": "advanced-matview-nonjoin.sql",
+        "normalizer": "normalizer.py"},
+
+    "advanced-matview-join": {"schema": "matview-advanced-join-schema.py",
+        "ddl": "matview-DDL.sql",
+        "template": "advanced-matview-join.sql",
+        "normalizer": "normalizer.py"},
 }
