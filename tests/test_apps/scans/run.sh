@@ -67,6 +67,7 @@ function benchmark() {
     java -classpath obj:$CLASSPATH:obj -Dlog4j.configuration=file://$CLIENTLOG4J \
         scans.ScanBenchmark \
         --runs=20 \
+        --test='sequential' \
         --rows=25000000 \
         --servers=localhost:21212
 }
