@@ -150,6 +150,8 @@ public class InMemoryJarfile extends TreeMap<String, byte[]> {
     }
 
     protected void writeToOutputStream(OutputStream output) throws IOException {
+        // The caller providing output is responsible for closing it.
+        @SuppressWarnings("resource")
         JarOutputStream jarOut = new JarOutputStream(output);
 
         for (Entry<String, byte[]> e : super.entrySet()) {
@@ -191,8 +193,12 @@ public class InMemoryJarfile extends TreeMap<String, byte[]> {
 
         bytes = new byte[(int) value.length()];
         BufferedInputStream in = new BufferedInputStream(new FileInputStream(value));
-        int bytesRead = in.read(bytes);
-        assert(bytesRead != -1);
+        try {
+            int bytesRead = in.read(bytes);
+            assert(bytesRead != -1);
+        } finally {
+            in.close();
+        }
 
         return put(key, bytes);
     }
