@@ -1624,6 +1624,7 @@ public class DDLCompiler {
             }
         }
 
+
         String msg = "Created index: " + name + " on table: " +
                     table.getTypeName() + " of type: " + IndexType.get(index.getType()).name();
 
