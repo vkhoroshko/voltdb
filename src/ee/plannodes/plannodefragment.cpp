@@ -55,14 +55,23 @@ using namespace std;
 
 using namespace voltdb;
 
-PlanNodeFragment::PlanNodeFragment()
-{
-    m_serializedType = "org.voltdb.plannodes.PlanNodeList";
-}
+PlanNodeFragment::PlanNodeFragment(int stmtCnt) :
+    m_serializedType("org.voltdb.plannodes.PlanNodeList"),
+    m_stmtCnt(stmtCnt),
+    m_idToNodeMap(),
+    m_stmtExecutionListArray(new std::vector<AbstractPlanNode*>[m_stmtCnt]),
+    m_stmtPlanNodesArray(new std::vector<AbstractPlanNode*>[m_stmtCnt]),
+    m_parameters()
+{}
 
-PlanNodeFragment::PlanNodeFragment(AbstractPlanNode *root_node)
+PlanNodeFragment::PlanNodeFragment(AbstractPlanNode *root_node) :
+    m_serializedType("org.voltdb.plannodes.PlanNodeList"),
+    m_stmtCnt(1),
+    m_idToNodeMap(),
+    m_stmtExecutionListArray(new std::vector<AbstractPlanNode*>[m_stmtCnt]),
+    m_stmtPlanNodesArray(new std::vector<AbstractPlanNode*>[m_stmtCnt]),
+    m_parameters()
 {
-    m_serializedType = "org.voltdb.plannodes.PlanNodeList";
     if (constructTree(root_node) != true) {
         throwFatalException("Failed to construct plan fragment");
     }
@@ -70,7 +79,7 @@ PlanNodeFragment::PlanNodeFragment(AbstractPlanNode *root_node)
 
 bool PlanNodeFragment::constructTree(AbstractPlanNode* node) {
     if (m_idToNodeMap.find(node->getPlanNodeId()) == m_idToNodeMap.end()) {
-        m_planNodes.push_back(node);
+        m_stmtExecutionListArray[0].push_back(node);
         m_idToNodeMap[node->getPlanNodeId()] = node;
         std::vector<AbstractPlanNode*> children = node->getChildren();
         for (int ii = 0; ii < children.size(); ++ii) {
@@ -83,8 +92,11 @@ bool PlanNodeFragment::constructTree(AbstractPlanNode* node) {
 }
 
 PlanNodeFragment::~PlanNodeFragment() {
-    for (int ii = 0; ii < m_planNodes.size(); ii++) {
-        delete m_planNodes[ii];
+    for (int ii = 0; ii < m_stmtCnt; ii++) {
+        for (std::vector<AbstractPlanNode*>::iterator it = m_stmtPlanNodesArray[ii].begin();
+             it != m_stmtPlanNodesArray[ii].end(); ++it) {
+                delete *it;
+        }
     }
 }
 
@@ -103,30 +115,30 @@ PlanNodeFragment::createFromCatalog(const string value)
 PlanNodeFragment *
 PlanNodeFragment::fromJSONObject(PlannerDomValue obj)
 {
-    auto_ptr<PlanNodeFragment> pnf(new PlanNodeFragment());
-
     // read and construct plannodes from json object
-    PlannerDomValue planNodesArray = obj.valueForKey("PLAN_NODES");
-
-    for (int i = 0; i < planNodesArray.arrayLen(); i++) {
-        AbstractPlanNode *node = NULL;
-        node = AbstractPlanNode::fromJSONObject(planNodesArray.valueAtIndex(i));
-        assert(node);
-
-        pnf->m_planNodes.push_back(node);
-        pnf->m_idToNodeMap[node->getPlanNodeId()] = node;
-    }
-
-    // walk the plannodes and complete each plannode's id-to-node maps
-    for (std::vector< AbstractPlanNode* >::const_iterator node = pnf->m_planNodes.begin();
-         node != pnf->m_planNodes.end(); ++node) {
-        const std::vector<CatalogId> childIds = (*node)->getChildIds();
-        std::vector<AbstractPlanNode*> &children = (*node)->getChildren();
-        for (int zz = 0; zz < childIds.size(); zz++) {
-            children.push_back(pnf->m_idToNodeMap[childIds[zz]]);
+    int stmtCnt = 1;
+    auto_ptr<PlanNodeFragment> pnf;
+    if (obj.hasNonNullKey("PLAN_NODES_LISTS")) {
+        PlannerDomValue planNodesListArray = obj.valueForKey("PLAN_NODES_LISTS");
+        if (!obj.hasNonNullKey("EXECUTE_LISTS")) {
+            throwFatalException("Failed to construct plan fragment. Missing EXECUTE_LISTS key");
         }
+        PlannerDomValue executeListArray = obj.valueForKey("EXECUTE_LISTS");
+        if (planNodesListArray.arrayLen() != executeListArray.arrayLen()) {
+            throwFatalException("Failed to construct plan fragment. EXECUTE_LISTS and PLAN_NODES_LISTS do not match");
+        }
+        stmtCnt = planNodesListArray.arrayLen();
+        pnf.reset(new PlanNodeFragment(stmtCnt));
+        for (int i = 0; i < stmtCnt; i++) {
+            PlannerDomValue planNodesList = planNodesListArray.valueAtIndex(i).valueForKey("PLAN_NODES");
+            PlannerDomValue executeList = executeListArray.valueAtIndex(i).valueForKey("EXECUTE_LIST");
+            PlanNodeFragment::nodeListFromJSONObject(pnf.get(), planNodesList, executeList, i);
+        }
+    } else {
+        pnf.reset(new PlanNodeFragment(stmtCnt));
+        PlanNodeFragment::nodeListFromJSONObject(pnf.get(), obj.valueForKey("PLAN_NODES"), obj.valueForKey("EXECUTE_LIST"), 0);
     }
-    pnf->loadFromJSONObject(obj);
+    PlanNodeFragment::loadParamsFromJSONObject(pnf.get(), obj);
 
     PlanNodeFragment *retval = pnf.get();
     pnf.release();
@@ -135,20 +147,47 @@ PlanNodeFragment::fromJSONObject(PlannerDomValue obj)
 }
 
 void
-PlanNodeFragment::loadFromJSONObject(PlannerDomValue obj)
+PlanNodeFragment::nodeListFromJSONObject(PlanNodeFragment *pnf, PlannerDomValue planNodesList, PlannerDomValue executeList, int stmtId)
 {
-    PlannerDomValue executeListArray = obj.valueForKey("EXECUTE_LIST");
-    for (int i = 0; i < executeListArray.arrayLen(); i++) {
-        m_executionList.push_back(m_idToNodeMap[executeListArray.valueAtIndex(i).asInt()]);
+    // NODE_LIST
+    std::vector<AbstractPlanNode*>& planNodes = pnf->m_stmtPlanNodesArray[stmtId];
+    for (int i = 0; i < planNodesList.arrayLen(); i++) {
+        AbstractPlanNode *node = NULL;
+        node = AbstractPlanNode::fromJSONObject(planNodesList.valueAtIndex(i));
+        assert(node);
+
+        planNodes.push_back(node);
+        pnf->m_idToNodeMap[node->getPlanNodeId()] = node;
     }
 
+    // walk the plannodes and complete each plannode's id-to-node maps
+    for (std::vector< AbstractPlanNode* >::const_iterator node = planNodes.begin();
+         node != planNodes.end(); ++node) {
+        const std::vector<CatalogId> childIds = (*node)->getChildIds();
+        std::vector<AbstractPlanNode*> &children = (*node)->getChildren();
+        for (int zz = 0; zz < childIds.size(); zz++) {
+            children.push_back(pnf->m_idToNodeMap[childIds[zz]]);
+        }
+    }
+
+    // EXECUTE_LIST
+    std::vector<AbstractPlanNode*>& executeNodeList = pnf->m_stmtExecutionListArray[stmtId];
+    for (int i = 0; i < executeList.arrayLen(); i++) {
+        executeNodeList.push_back(pnf->m_idToNodeMap[executeList.valueAtIndex(i).asInt()]);
+    }
+
+}
+
+void
+PlanNodeFragment::loadParamsFromJSONObject(PlanNodeFragment *pnf, PlannerDomValue obj)
+{
     if (obj.hasKey("PARAMETERS")) {
         PlannerDomValue parametersArray = obj.valueForKey("PARAMETERS");
         for (int i = 0; i < parametersArray.arrayLen(); i++) {
             PlannerDomValue parameterArray = parametersArray.valueAtIndex(i);
             int index = parameterArray.valueAtIndex(0).asInt();
             std::string typeString = parameterArray.valueAtIndex(1).asStr();
-            parameters.push_back(std::pair< int, voltdb::ValueType>(index, stringToValue(typeString)));
+            pnf->m_parameters.push_back(std::pair< int, voltdb::ValueType>(index, stringToValue(typeString)));
         }
     }
 }
@@ -156,14 +195,16 @@ PlanNodeFragment::loadFromJSONObject(PlannerDomValue obj)
 bool PlanNodeFragment::hasDelete() const
 {
     bool has_delete = false;
-    for (int ii = 0; ii < m_planNodes.size(); ii++)
+    // delete node can be only in the parent statement
+    std::vector<AbstractPlanNode*>& planNodes = m_stmtPlanNodesArray[0];
+    for (int ii = 0; ii < planNodes.size(); ii++)
     {
-        if (m_planNodes[ii]->getPlanNodeType() == PLAN_NODE_TYPE_DELETE)
+        if (planNodes[ii]->getPlanNodeType() == PLAN_NODE_TYPE_DELETE)
         {
             has_delete = true;
             break;
         }
-        if (m_planNodes[ii]->getInlinePlanNode(PLAN_NODE_TYPE_DELETE) != NULL)
+        if (planNodes[ii]->getInlinePlanNode(PLAN_NODE_TYPE_DELETE) != NULL)
         {
             has_delete = true;
             break;
@@ -174,11 +215,14 @@ bool PlanNodeFragment::hasDelete() const
 
 std::string PlanNodeFragment::debug() {
     std::ostringstream buffer;
-    buffer << "Execute List:\n";
-    for (int ctr = 0, cnt = (int)m_executionList.size(); ctr < cnt; ctr++) {
-        buffer << "   [" << ctr << "]: " << m_executionList[ctr]->debug() << "\n";
+    for (int i = 0; i < m_stmtCnt; ++i) {
+        buffer << "Execute List " << i << ":\n";
+        std::vector<AbstractPlanNode*>& executeList = m_stmtExecutionListArray[i];
+        for (int ctr = 0, cnt = (int)executeList.size(); ctr < cnt; ctr++) {
+            buffer << "   [" << ctr << "]: " << executeList[ctr]->debug() << "\n";
+        }
+        buffer << "Execute Tree " << i << ":\n";
+        buffer << getRootNode(i)->debug(true);
     }
-    buffer << "Execute Tree:\n";
-    buffer << getRootNode()->debug(true);
     return (buffer.str());
 }

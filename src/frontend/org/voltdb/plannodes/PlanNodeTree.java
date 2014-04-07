@@ -30,6 +30,9 @@ import org.json_voltpatches.JSONStringer;
 import org.voltcore.utils.Pair;
 import org.voltdb.VoltType;
 import org.voltdb.catalog.Database;
+import org.voltdb.expressions.AbstractExpression;
+import org.voltdb.expressions.SubqueryExpression;
+import org.voltdb.types.ExpressionType;
 import org.voltdb.types.PlanNodeType;
 
 /**
@@ -39,40 +42,46 @@ public class PlanNodeTree implements JSONString {
 
     public enum Members {
         PLAN_NODES,
-        PARAMETERS;
+        PLAN_NODES_LISTS,
+        PARAMETERS,
+        PARAMETER_IDX;
     }
 
-    protected final List<AbstractPlanNode> m_planNodes;
-    protected final Map<Integer, AbstractPlanNode> m_idToNodeMap = new HashMap<Integer, AbstractPlanNode>();
     protected final List< Pair< Integer, VoltType > > m_parameters = new ArrayList< Pair< Integer, VoltType > >();
+    // Subquery ID / subquery plan node list map. The top level statement always has id = 0
+    protected final List<List<AbstractPlanNode>> m_planNodesList = new ArrayList<List<AbstractPlanNode>>();
+    // Subquery ID / subquery root node plan
+    protected final Map<Integer, AbstractPlanNode> m_subqueryMap = new HashMap<Integer, AbstractPlanNode>();
 
     public PlanNodeTree() {
-        m_planNodes = new ArrayList<AbstractPlanNode>();
     }
 
     public PlanNodeTree(AbstractPlanNode root_node) {
-        this();
         try {
-            constructTree(root_node);
+            List<AbstractPlanNode> nodeList = new ArrayList<AbstractPlanNode>();
+            m_planNodesList.add(nodeList);
+            constructTree(nodeList, root_node);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
     public Integer getRootPlanNodeId() {
-        return m_planNodes.get(0).getPlanNodeId();
+        assert(!m_planNodesList.isEmpty() && !m_planNodesList.get(0).isEmpty());
+        return m_planNodesList.get(0).get(0).getPlanNodeId();
     }
 
     public AbstractPlanNode getRootPlanNode() {
-        return m_planNodes.get(0);
+        assert(!m_planNodesList.isEmpty() && !m_planNodesList.get(0).isEmpty());
+        return m_planNodesList.get(0).get(0);
     }
 
-    public Boolean constructTree(AbstractPlanNode node) throws Exception {
-        m_planNodes.add(node);
-        m_idToNodeMap.put(node.getPlanNodeId(), node);
+    public Boolean constructTree(List<AbstractPlanNode> planNodes, AbstractPlanNode node) throws Exception {
+        planNodes.add(node);
+        extractSubqueries(node);
         for (int i = 0; i < node.getChildCount(); i++) {
             AbstractPlanNode child = node.getChild(i);
-            if (!constructTree(child)) {
+            if (!constructTree(planNodes, child)) {
                 return false;
             }
         }
@@ -103,12 +112,25 @@ public class PlanNodeTree implements JSONString {
     }
 
     public void toJSONString(JSONStringer stringer) throws JSONException {
-        stringer.key(Members.PLAN_NODES.name()).array();
-        for (AbstractPlanNode node : m_planNodes) {
-            assert (node instanceof JSONString);
-            stringer.value(node);
+        if (m_planNodesList.size() == 1) {
+            stringer.key(Members.PLAN_NODES.name()).array();
+            for (AbstractPlanNode node : m_planNodesList.get(0)) {
+                assert (node instanceof JSONString);
+                stringer.value(node);
+            }
+            stringer.endArray(); //end entries
+        } else {
+            stringer.key(Members.PLAN_NODES_LISTS.name()).array();
+            for (List<AbstractPlanNode> planNodes : m_planNodesList) {
+                stringer.object().key(Members.PLAN_NODES.name()).array();
+                for (AbstractPlanNode node : planNodes) {
+                    assert (node instanceof JSONString);
+                    stringer.value(node);
+                }
+                stringer.endArray().endObject(); //end entries
+            }
+            stringer.endArray(); //end entries
         }
-        stringer.endArray(); //end entries
 
         if (m_parameters.size() > 0) {
             stringer.key(Members.PARAMETERS.name()).array();
@@ -120,10 +142,53 @@ public class PlanNodeTree implements JSONString {
     }
 
     public List<AbstractPlanNode> getNodeList() {
-        return m_planNodes;
+        return m_planNodesList.get(0);
     }
 
-    public void loadFromJSONArray( JSONArray jArray, Database db )  {
+    public List<AbstractPlanNode> getNodeList(int idx) {
+        assert(idx < m_planNodesList.size());
+        return m_planNodesList.get(idx);
+    }
+
+    /**
+     *  Load json plan. The plan must have either "PLAN_NODE" array in case of a statement without
+     *  subqueries or "PLAN_NODES_LISTS" array of "PLAN_NODE" arrays for each sub statement.
+     * @param jobj
+     * @param db
+     * @throws JSONException
+     */
+    public void loadFromJSONPlan( JSONObject jobj, Database db )  throws JSONException {
+        if (jobj.has(PlanNodeTree.Members.PLAN_NODES_LISTS.name())) {
+            JSONArray jplanNodesArray = jobj.getJSONArray(PlanNodeTree.Members.PLAN_NODES_LISTS.name());
+            for (int i = 0; i < jplanNodesArray.length(); ++i) {
+                JSONObject jplanNodesObj = jplanNodesArray.getJSONObject(i);
+                JSONArray jplanNodes = jplanNodesObj.getJSONArray(PlanNodeTree.Members.PLAN_NODES.name());
+                loadPlanNodesFromJSONArrays(jplanNodes, db);
+            }
+        } else {
+            JSONArray jplanNodes = jobj.getJSONArray(PlanNodeTree.Members.PLAN_NODES.name());
+            loadPlanNodesFromJSONArrays(jplanNodes, db);
+        }
+        // Connect the parent and child statements
+        for (List<AbstractPlanNode> nextPlanNodes : m_planNodesList) {
+            connectParentChildStmt(nextPlanNodes);
+        }
+    }
+
+    /**
+     *  Load plan nodes from the "PLAN_NODE" array
+     * @param jArray - PLAN_NODES
+     * @param db
+     * @throws JSONException
+     */
+
+    public void loadPlanNodesFromJSONArrays( JSONArray jArray, Database db )  {
+        List<AbstractPlanNode> planNodes = new ArrayList<AbstractPlanNode>();
+        m_planNodesList.add(planNodes);
+        loadFromJSONArray(jArray, db, planNodes);
+    }
+
+    private void loadFromJSONArray( JSONArray jArray, Database db, List<AbstractPlanNode> planNodes)  {
         int size = jArray.length();
 
         try {
@@ -145,7 +210,7 @@ public class PlanNodeTree implements JSONString {
                     return;
                 }
                 apn.loadFromJSONObject(jobj, db);
-                m_planNodes.add(apn);
+                planNodes.add(apn);
             }
             //link children and parents
             for( int i = 0; i < size; i++ ) {
@@ -154,7 +219,7 @@ public class PlanNodeTree implements JSONString {
                 if (jobj.has("CHILDREN_IDS")) {
                     JSONArray children = jobj.getJSONArray("CHILDREN_IDS");
                     for( int j = 0; j < children.length(); j++ ) {
-                        m_planNodes.get(i).addAndLinkChild( getNodeofId( children.getInt(j) ) );
+                        planNodes.get(i).addAndLinkChild( getNodeofId( children.getInt(j), planNodes ) );
                     }
                 }
             }
@@ -164,13 +229,88 @@ public class PlanNodeTree implements JSONString {
         }
     }
 
-    public AbstractPlanNode getNodeofId ( int ID ) {
-        int size = m_planNodes.size();
+    private void connectParentChildStmt(List<AbstractPlanNode> planNodes) {
+        for(AbstractPlanNode node : planNodes) {
+            if (node instanceof AbstractScanPlanNode) {
+                AbstractScanPlanNode scanNode = (AbstractScanPlanNode)node;
+                connectPredicateStmt(scanNode.getPredicate());
+            } else if (node instanceof AbstractJoinPlanNode) {
+                AbstractJoinPlanNode joinNode = (AbstractJoinPlanNode) node;
+                connectPredicateStmt(joinNode.getPreJoinPredicate());
+                connectPredicateStmt(joinNode.getJoinPredicate());
+                connectPredicateStmt(joinNode.getWherePredicate());
+            }
+        }
+    }
+
+    private void connectPredicateStmt(AbstractExpression predicate) {
+        if (predicate == null) {
+            return;
+        }
+        List<AbstractExpression> existsExprs = predicate.findAllSubexpressionsOfType(
+                ExpressionType.OPERATOR_EXISTS);
+        for (AbstractExpression expr : existsExprs) {
+            assert(expr.getLeft() != null && expr.getLeft() instanceof SubqueryExpression);
+            SubqueryExpression subqueryExpr = (SubqueryExpression) expr.getLeft();
+            int subqueryId = subqueryExpr.getSubqueryId();
+            int subqueryNodeId = subqueryExpr.getSubqueryNodeId();
+            List<AbstractPlanNode> subqueryNodes = m_planNodesList.get(subqueryId);
+            AbstractPlanNode subqueryNode = getNodeofId(subqueryNodeId, subqueryNodes);
+            assert(subqueryNode != null);
+            subqueryExpr.setSubqueryNode(subqueryNode);
+        }
+    }
+
+    public AbstractPlanNode getNodeofId (int ID, List<AbstractPlanNode> planNodes) {
+        int size = planNodes.size();
         for( int i = 0; i < size; i++ ) {
-            if( m_planNodes.get(i).getPlanNodeId() == ID ) {
-                return m_planNodes.get(i);
+            if( planNodes.get(i).getPlanNodeId() == ID ) {
+                return planNodes.get(i);
             }
         }
         return null;
     }
+
+    /**
+     * Traverse down the plan extracting all the subquery plans. The potential places where
+     * the suqueries could be found are:
+     *  - NestLoopInPlan
+     *  - AbstractScanPlanNode predicate
+     *  - AbstractJoinPlanNode predicates
+     * @param node
+     * @throws Exception
+     */
+    private void extractSubqueries(AbstractPlanNode node)  throws Exception {
+        if (node instanceof AbstractScanPlanNode) {
+            AbstractScanPlanNode scanNode = (AbstractScanPlanNode) node;
+            extractSubqueriesFromExpression(scanNode.getPredicate());
+        } else if (node instanceof AbstractJoinPlanNode) {
+            AbstractJoinPlanNode joinNode = (AbstractJoinPlanNode) node;
+            extractSubqueriesFromExpression(joinNode.getPreJoinPredicate());
+            extractSubqueriesFromExpression(joinNode.getJoinPredicate());
+            extractSubqueriesFromExpression(joinNode.getWherePredicate());
+            AbstractPlanNode inlineScan = joinNode.getInlinePlanNode(PlanNodeType.INDEXSCAN);
+            if (inlineScan != null) {
+                assert(inlineScan instanceof AbstractScanPlanNode);
+                extractSubqueriesFromExpression(((AbstractScanPlanNode)inlineScan).getPredicate());
+            }
+        }
+    }
+    private void extractSubqueriesFromExpression(AbstractExpression expr)  throws Exception {
+        if (expr == null) {
+            return;
+        }
+        List<AbstractExpression> subexprs = expr.findAllSubexpressionsOfType(ExpressionType.SUBQUERY);
+        for(AbstractExpression nextexpr : subexprs) {
+            assert(nextexpr instanceof SubqueryExpression);
+            SubqueryExpression subqueryExpr = (SubqueryExpression) nextexpr;
+            int stmtId = subqueryExpr.getSubqueryId();
+            m_subqueryMap.put(stmtId, subqueryExpr.getSubqueryNode());
+            List<AbstractPlanNode> planNodes = new ArrayList<AbstractPlanNode>();
+            assert(stmtId == m_planNodesList.size());
+            m_planNodesList.add(planNodes);
+            constructTree(planNodes, subqueryExpr.getSubqueryNode());
+        }
+    }
+
 }

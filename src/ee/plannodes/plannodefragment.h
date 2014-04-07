@@ -51,11 +51,14 @@
 #include <map>
 #include <list>
 
+#include <boost/shared_array.hpp>
+
 #include "common/PlannerDomValue.h"
 #include "common/common.h"
 #include "common/serializeio.h"
 #include "catalog/catalog.h"
 #include "catalog/database.h"
+#include "expressions/abstractexpression.h"
 
 namespace voltdb {
 
@@ -69,27 +72,30 @@ class AbstractPlanNode;
 class PlanNodeFragment {
 
   public:
-    PlanNodeFragment();
+    PlanNodeFragment(int stmtCnt = 1);
     virtual ~PlanNodeFragment();
 
     // construct a new fragment from the catalog's serialization
     static PlanNodeFragment * createFromCatalog(const std::string);
-
-    // construct a new fragment from a serialized json object
-    static PlanNodeFragment* fromJSONObject(PlannerDomValue obj);
 
     // construct a new fragment from a root node (used by testcode)
     PlanNodeFragment(AbstractPlanNode *root_node);
     bool constructTree(AbstractPlanNode *node);
 
     // first node in serialization order
-    AbstractPlanNode * getRootNode() {
-        return m_planNodes.front();
+    AbstractPlanNode * getRootNode(int stmtId = 0) {
+        assert(m_stmtPlanNodesArray.get() != NULL && stmtId < m_stmtCnt);
+        return m_stmtPlanNodesArray[stmtId].front();
     }
 
-    // the list of plannodes in execution order
-    inline const std::vector<AbstractPlanNode*>& getExecuteList() const {
-        return m_executionList;
+    // the list of plannodes in execution order for a given sub-statement
+    inline const std::vector<AbstractPlanNode*>& getExecuteList(int stmtId = 0) const {
+        assert(m_stmtExecutionListArray.get() != NULL && stmtId < m_stmtCnt);
+        return m_stmtExecutionListArray[stmtId];
+    }
+
+    int getStatementCount() const {
+        return m_stmtCnt;
     }
 
     // true if this plan fragment contains a delete plan node.  Used
@@ -100,23 +106,33 @@ class PlanNodeFragment {
     std::string debug();
 
     // Get the list of parameters used to execute this plan fragment
-    std::vector<std::pair< int, voltdb::ValueType> > getParameters() { return parameters; }
+    std::vector<std::pair< int, voltdb::ValueType> > getParameters() { return m_parameters; }
 
   private:
 
-    // reads execute list from plannodelist json objects
-    void loadFromJSONObject(PlannerDomValue obj);
+    // construct a new fragment from a serialized json object
+    static PlanNodeFragment* fromJSONObject(PlannerDomValue planNodesArray);
+    // read node list for a given sub statement
+    static void nodeListFromJSONObject(PlanNodeFragment *pnf, PlannerDomValue planNodesList, PlannerDomValue executeList, int stmtId);
+
+    // reads parameters from json objects
+    static void loadParamsFromJSONObject(PlanNodeFragment *pnf, PlannerDomValue obj);
 
     // serialized java type: org.voltdb.plannodes.PlanNode[List|Tree]
     std::string m_serializedType;
+    // total number of the statements in the fragment
+    int m_stmtCnt;
     // translate id from catalog to pointer to plannode
     std::map<CatalogId, AbstractPlanNode*> m_idToNodeMap;
-    // pointers to nodes in execution order
-    std::vector<AbstractPlanNode*> m_executionList;
-    // pointers to nodes in serialization order
-    std::vector<AbstractPlanNode*> m_planNodes;
+    // pointers to nodes in execution order grouped by substatement
+    // the statement id is an index into the array. The top statement (parent) always has index 0
+    boost::shared_array<std::vector<AbstractPlanNode*> > m_stmtExecutionListArray;
+    // pointers to subqueries nodes in serialization order grouped by substatement
+    // the statement id is an index into the array. The top statement (parent) always has index 0
+    boost::shared_array<std::vector<AbstractPlanNode*> > m_stmtPlanNodesArray;
     // Pairs of argument index and type for parameters to the fragment
-    std::vector<std::pair< int, voltdb::ValueType> > parameters;
+    std::vector<std::pair< int, voltdb::ValueType> > m_parameters;
+
 };
 
 

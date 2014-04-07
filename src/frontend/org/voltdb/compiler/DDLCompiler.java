@@ -1841,6 +1841,9 @@ public class DDLCompiler {
                         viewName, srcTable.getTypeName());
                 throw m_compiler.new VoltCompilerException(msg);
             }
+            // ENG-451-MERGE
+//            assert(srcTableScan instanceof StmtTargetTableScan);
+//            Table srcTable = ((StmtTargetTableScan)srcTableScan).getTargetTable();
 
             MaterializedViewInfo matviewinfo = srcTable.getViews().add(viewName);
             matviewinfo.setDest(destTable);
@@ -2035,7 +2038,7 @@ public class DDLCompiler {
                     continue;
                 }
                 List<AbstractExpression> indexedExprs = null;
-                StmtTableScan tableScan = new StmtTargetTableScan(srcTable, srcTable.getTypeName());
+                StmtTableScan tableScan = new StmtTargetTableScan(srcTable, srcTable.getTypeName(), 0);
                 try {
                     indexedExprs = AbstractExpression.fromJSONArrayString(expressionjson, tableScan);
                 } catch (JSONException e) {

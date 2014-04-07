@@ -32,7 +32,10 @@ import org.voltdb.catalog.Column;
 import org.voltdb.catalog.Database;
 import org.voltdb.expressions.AbstractExpression;
 import org.voltdb.expressions.ExpressionUtil;
+import org.voltdb.expressions.SubqueryExpression;
 import org.voltdb.expressions.TupleValueExpression;
+import org.voltdb.planner.CompiledPlan;
+import org.voltdb.types.ExpressionType;
 import org.voltdb.planner.parseinfo.StmtSubqueryScan;
 import org.voltdb.planner.parseinfo.StmtTableScan;
 import org.voltdb.planner.parseinfo.StmtTargetTableScan;
@@ -112,6 +115,21 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
                                     " table: " + col.getTableName());
             }
         }
+    }
+
+    @Override
+    public int overrideId(int newId) {
+        m_id = newId++;
+        // Now override the ids in the subqueries nodes if any
+        if (m_predicate != null) {
+            List<AbstractExpression> subqueries = m_predicate.findAllSubexpressionsOfType(ExpressionType.SUBQUERY);
+            for (AbstractExpression subquery : subqueries) {
+                assert(subquery instanceof SubqueryExpression);
+                CompiledPlan subqueryPlan = ((SubqueryExpression)subquery).getTable().getBestCostPlan();
+                newId = subqueryPlan.resetPlanNodeIds(newId);
+            }
+        }
+        return newId;
     }
 
     /**
@@ -310,6 +328,8 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
                 m_hasSignificantOutputSchema = true;
             }
         }
+        // Generate the output schema for subqueries
+        generateSubqueryExpressionOutputSchema(m_predicate, db);
     }
 
     @Override
@@ -369,7 +389,8 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
             limit.m_outputSchema = m_outputSchema.clone();
             limit.m_hasSignificantOutputSchema = false; // It's just another cheap knock-off
         }
-
+        // Resolve subquery expression indexes
+        resolveSubqueryExpressionColumnIndexes(m_predicate);
     }
 
     @Override

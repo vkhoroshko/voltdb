@@ -19,6 +19,7 @@
 #define STRINGFUNCTIONS_H
 
 #include <boost/algorithm/string.hpp>
+#include "common/NValue.hpp"
 
 namespace voltdb {
 

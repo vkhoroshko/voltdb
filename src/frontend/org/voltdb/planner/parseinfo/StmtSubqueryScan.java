@@ -38,6 +38,14 @@ import org.voltdb.plannodes.SchemaColumn;
  */
 public class StmtSubqueryScan extends StmtTableScan {
 
+    // ENG-451-MERGE
+//    // Sub-Query
+//    private TempTable m_tempTable = null;
+//    // The mapping - the temp table column to the sub-query (column, table) pair
+//    Map<String, ParsedColInfo> m_columnMap = new HashMap<String, ParsedColInfo>();
+//    // Replicated indicator
+//    Boolean m_isReplicated = null;
+
     // Sub-Query
     private final AbstractParsedStmt m_subquery;
     private ArrayList<SchemaColumn> m_outputColumnList = new ArrayList<>();
@@ -47,11 +55,18 @@ public class StmtSubqueryScan extends StmtTableScan {
     // The partitioning object for that sub-query
     PartitioningForStatement m_partitioning = null;
 
+    // ENG-451-MERGE
+//     public StmtSubqueryScan(TempTable tempTable, String tableAlias, int stmtId) {
+//        super(tableAlias, stmtId);
+//        assert (tempTable != null);
+//        m_tempTable = tempTable;
+//    }
+
     /*
      * This 'subquery' actually is the parent query on the derived table with alias 'tableAlias'
      */
-    public StmtSubqueryScan(AbstractParsedStmt subquery, String tableAlias) {
-        super(tableAlias);
+    public StmtSubqueryScan(AbstractParsedStmt subquery, String tableAlias, int stmtId) {
+        super(tableAlias, stmtId);
         m_subquery = subquery;
         // A union or other set operator uses the output columns of its left-most leaf child statement.
         while (subquery instanceof ParsedUnionStmt) {
@@ -94,7 +109,12 @@ public class StmtSubqueryScan extends StmtTableScan {
         return true;
     }
 
-    @Override
+    // ENG-451-MERGE
+//    @Override
+//    public PartitioningForStatement getPartitioning() {
+//        return m_partitioning;
+//    }
+
     public void setPartitioning(PartitioningForStatement partitioning) {
         m_partitioning = partitioning;
     }

@@ -17,6 +17,7 @@
 
 package org.voltdb.plannodes;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 
@@ -26,7 +27,10 @@ import org.json_voltpatches.JSONStringer;
 import org.voltdb.catalog.Database;
 import org.voltdb.expressions.AbstractExpression;
 import org.voltdb.expressions.ExpressionUtil;
+import org.voltdb.expressions.SubqueryExpression;
 import org.voltdb.expressions.TupleValueExpression;
+import org.voltdb.planner.CompiledPlan;
+import org.voltdb.types.ExpressionType;
 import org.voltdb.types.JoinType;
 import org.voltdb.types.PlanNodeType;
 import org.voltdb.types.SortDirectionType;
@@ -110,6 +114,8 @@ public abstract class AbstractJoinPlanNode extends AbstractPlanNode {
     {
         if (predicate != null) {
             m_wherePredicate = (AbstractExpression) predicate.clone();
+        } else {
+            m_wherePredicate = null;
         }
     }
 
@@ -120,6 +126,8 @@ public abstract class AbstractJoinPlanNode extends AbstractPlanNode {
     {
         if (predicate != null) {
             m_preJoinPredicate = (AbstractExpression) predicate.clone();
+        } else {
+            m_preJoinPredicate = null;
         }
     }
 
@@ -130,7 +138,31 @@ public abstract class AbstractJoinPlanNode extends AbstractPlanNode {
     {
         if (predicate != null) {
             m_joinPredicate = (AbstractExpression) predicate.clone();
+        } else {
+            m_joinPredicate = null;
         }
+    }
+
+    @Override
+    public int overrideId(int newId) {
+        m_id = newId++;
+        List<AbstractExpression> subqueries = new ArrayList<AbstractExpression>();
+        if (m_preJoinPredicate != null) {
+            subqueries.addAll(m_preJoinPredicate.findAllSubexpressionsOfType(ExpressionType.SUBQUERY));
+        }
+        // Now override the ids in the subqueries nodes if any
+        if (m_joinPredicate != null) {
+            subqueries.addAll(m_joinPredicate.findAllSubexpressionsOfType(ExpressionType.SUBQUERY));
+        }
+        if (m_wherePredicate != null) {
+            subqueries.addAll(m_wherePredicate.findAllSubexpressionsOfType(ExpressionType.SUBQUERY));
+        }
+        for (AbstractExpression subquery : subqueries) {
+            assert(subquery instanceof SubqueryExpression);
+            CompiledPlan subqueryPlan = ((SubqueryExpression)subquery).getTable().getBestCostPlan();
+            newId = subqueryPlan.resetPlanNodeIds(newId);
+        }
+        return newId;
     }
 
     @Override
@@ -153,6 +185,12 @@ public abstract class AbstractJoinPlanNode extends AbstractPlanNode {
             m_children.get(0).getOutputSchema().
             join(m_children.get(1).getOutputSchema()).copyAndReplaceWithTVE();
         m_hasSignificantOutputSchema = true;
+
+        // Generate the output schema for subqueries
+        generateSubqueryExpressionOutputSchema(m_preJoinPredicate, db);
+        generateSubqueryExpressionOutputSchema(m_joinPredicate, db);
+        generateSubqueryExpressionOutputSchema(m_wherePredicate, db);
+
     }
 
     // Given any non-inlined type of join, this method will resolve the column
@@ -214,6 +252,12 @@ public abstract class AbstractJoinPlanNode extends AbstractPlanNode {
         resolvePredicate(m_preJoinPredicate, outer_schema, inner_schema);
         resolvePredicate(m_joinPredicate, outer_schema, inner_schema);
         resolvePredicate(m_wherePredicate, outer_schema, inner_schema);
+
+        // Resolve subquery expression indexes
+        resolveSubqueryExpressionColumnIndexes(m_preJoinPredicate);
+        resolveSubqueryExpressionColumnIndexes(m_joinPredicate);
+        resolveSubqueryExpressionColumnIndexes(m_wherePredicate);
+
     }
 
     public SortDirectionType getSortDirection() {
