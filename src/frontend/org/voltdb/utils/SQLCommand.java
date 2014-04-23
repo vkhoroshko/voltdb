@@ -768,6 +768,8 @@ public class SQLCommand
                 ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>()).build());
         Procedures.put("@Shutdown",
                 ImmutableMap.<Integer, List<String>>builder().put( 0, new ArrayList<String>()).build());
+        Procedures.put("@StopNode",
+                ImmutableMap.<Integer, List<String>>builder().put(1, Arrays.asList("int")).build());
         Procedures.put("@SnapshotDelete",
                 ImmutableMap.<Integer, List<String>>builder().put( 2, Arrays.asList("varchar", "varchar")).build()
                 );
@@ -849,6 +851,11 @@ public class SQLCommand
         + "\n"
         + "[--password=password]\n"
         + "  Password of the user for database login.\n"
+        + "  Default: (not defined - connection made without credentials).\n"
+        + "\n"
+        + "[--kerberos=jaas_login_configuration_entry_key]\n"
+        + "  Enable kerberos authentication for user database login by specifying\n"
+        + "  the JAAS login configuration file entry name"
         + "  Default: (not defined - connection made without credentials).\n"
         + "\n"
         + "[--query=query]\n"
@@ -1020,6 +1027,7 @@ public class SQLCommand
             int port = 21212;
             String user = "";
             String password = "";
+            String kerberos = "";
             List<String> queries = null;
 
             // Parse out parameters
@@ -1034,6 +1042,10 @@ public class SQLCommand
                     user = arg.split("=")[1];
                 else if (arg.startsWith("--password="))
                     password = arg.split("=")[1];
+                else if (arg.startsWith("--kerberos="))
+                    kerberos = arg.split("=")[1];
+                else if (arg.startsWith("--kerberos"))
+                    kerberos = "VoltDBClient";
                 else if (arg.startsWith("--query="))
                 {
                     List<String> argQueries = parseQuery(arg.substring(8));
@@ -1106,6 +1118,11 @@ public class SQLCommand
             // Create connection
             ClientConfig config = new ClientConfig(user, password);
             config.setProcedureCallTimeout(0);  // Set procedure all to infinite timeout, see ENG-2670
+
+            // if specified enable kerberos
+            if (!kerberos.isEmpty()) {
+                config.enableKerberosAuthentication(kerberos);
+            }
             VoltDB = getClient(config, servers, port);
 
             // Load user stored procs
