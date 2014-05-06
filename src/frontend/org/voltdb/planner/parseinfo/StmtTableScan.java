@@ -24,7 +24,6 @@ import java.util.Set;
 
 import org.voltdb.catalog.Index;
 import org.voltdb.expressions.TupleValueExpression;
-import org.voltdb.planner.PartitioningForStatement;
 import org.voltdb.plannodes.SchemaColumn;
 
 /**
@@ -65,8 +64,6 @@ public abstract class StmtTableScan {
     abstract public String getPartitionColumnName();
 
     abstract public List<Index> getIndexes();
-
-    public void setPartitioning(PartitioningForStatement partitioning) {}
 
     public int getStatementId() {
         return m_stmtId;
