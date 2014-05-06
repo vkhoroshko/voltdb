@@ -414,6 +414,10 @@ inline bool tableStreamTypeIsValid(TableStreamType streamType) {
     return streamType != TABLE_STREAM_NONE;
 }
 
+inline bool tableStreamTypeAppliesToPreTruncateTable(TableStreamType streamType) {
+    return streamType == TABLE_STREAM_ELASTIC_INDEX;
+}
+
 // ------------------------------------------------------------------
 // Statistics Selector Types
 // ------------------------------------------------------------------
@@ -460,6 +464,8 @@ enum TaskType {
 // Utility functions.
 // -----------------------------------------------------------------
 std::string getTypeName(ValueType type);
+std::string tableStreamTypeToString(TableStreamType type);
+
 bool isNumeric(ValueType type);
 bool isIntegralType(ValueType type);
 
