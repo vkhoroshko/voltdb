@@ -224,7 +224,7 @@ public class TestSubQueriesSuite extends RegressionSuite {
             validateTableOfLongs(vt, new long[][] { {1, 1}, {2, 1} });
 
             vt = client.callProcedure("@AdHoc", "select ID, DEPT FROM "+ tb +" T1 where " +
-                    "(ID, DEPT) IN (select DEPT, WAGE/10 from " + tb + ") ").getResults()[0];
+                    "(ID + 1 - 1, DEPT) IN (select DEPT, WAGE/10 from " + tb + ") ").getResults()[0];
             validateTableOfLongs(vt, new long[][] { {1, 1}});
 
             // Nested
@@ -236,6 +236,46 @@ public class TestSubQueriesSuite extends RegressionSuite {
         }
 
     }
+
+  /**
+  * Join two sub queries
+  * @throws NoConnectionsException
+  * @throws IOException
+  * @throws ProcCallException
+  */
+ public void testExists_Joins() throws NoConnectionsException, IOException, ProcCallException
+ {
+     Client client = getClient();
+     loadData(client);
+
+     VoltTable vt;
+
+     for (String tb: tbs) {
+         vt = client.callProcedure("@AdHoc",
+                 "select T1.id from R1 T1, " + tb +" T2 where " +
+                         "T1.id = T2.id and exists ( " +
+                 " select 1 from R1 where R1.dept * 2 = T2.dept)").getResults()[0];
+         System.out.println(vt.toString());
+         validateTableOfLongs(vt, new long[][] {{4}, {5}});
+
+         // Core dump
+         if (!isHSQL()) {
+             vt = client.callProcedure("@AdHoc",
+                     "select id, newid  " +
+                             "FROM (SELECT id, wage FROM R1) T1 " +
+                             "   LEFT OUTER JOIN " +
+                             "   (SELECT id as newid, dept FROM "+ tb +" where dept > 1) T2 " +
+                             "   ON T1.id = T2.dept and EXISTS( " +
+                             "      select 1 from R1 where R1.ID =  T2.newid ) " +
+                     "ORDER BY id, newid").getResults()[0];
+             System.out.println(vt.toString());
+             validateTableOfLongs(vt, new long[][] { {1, Long.MIN_VALUE}, {2, 4}, {2, 5},
+                     {3, Long.MIN_VALUE}, {4, Long.MIN_VALUE}, {5, Long.MIN_VALUE}});
+         }
+    }
+
+ }
+
 
   /**
   * SELECT FROM SELECT FROM SELECT
@@ -285,9 +325,45 @@ public void testSubExpressions_Aggregations() throws NoConnectionsException, IOE
                 "where T1.ID = P1.WAGE / 10 order by P1.ID;").getResults()[0];
         System.err.println(vt);
         validateTableOfLongs(vt, new long[][] { {1, 10}, {2, 20}, {3, 30}, {4, 40}, {5, 50}});
+
+
+        // Test IN/EXSITS
+
+        vt = client.callProcedure("@AdHoc",
+                "select dept, sum(wage) as sw1 from " + tb + " where (id, dept + 2) in " +
+                        "( SELECT dept, count(dept) " +
+                        "from " + tb + " GROUP BY dept ORDER BY dept DESC) GROUP BY dept;").getResults()[0];
+        System.out.println(vt.toString());
+        validateTableOfLongs(vt, new long[][] {{1,10}});
+
+        // having with subquery
+        vt = client.callProcedure("@AdHoc",
+                "select dept from " + tb + " group by dept " +
+                " having max(wage) in (select wage from R1) order by dept desc").getResults()[0];
+        System.out.println(vt.toString());
+        validateTableOfLongs(vt, new long[][] {{2}, {1}});
+
+        // subquery with having
+        vt = client.callProcedure("@AdHoc",
+                "select id from " + tb + " TBA where exists " +
+                        " (select dept from R1  group by dept having max(wage) = TBA.wage or " +
+                " min(wage) = TBA.wage)").getResults()[0];
+        System.out.println(vt.toString());
+        validateTableOfLongs(vt, new long[][] {{1}, {3}, {5}, {6}});
+
+        // having with subquery with having
+        String sql = "select id from " + tb + " where wage " +
+                " in (select max(wage) from R1 group by dept " +
+                " having max(wage) > 10)";
+        System.out.println(sql);
+        vt = client.callProcedure("@AdHoc",
+                "select id from " + tb + " where wage " +
+                        " in (select max(wage) from R1 group by dept " +
+                " having max(wage) > 30) ").getResults()[0];
+        System.out.println(vt.toString());
+        validateTableOfLongs(vt, new long[][] {{5}});
     }
 }
-
 
     static public junit.framework.Test suite()
     {

@@ -51,8 +51,6 @@
 #include <map>
 #include <list>
 
-#include <boost/shared_array.hpp>
-
 #include "common/PlannerDomValue.h"
 #include "common/common.h"
 #include "common/serializeio.h"
@@ -72,7 +70,11 @@ class AbstractPlanNode;
 class PlanNodeFragment {
 
   public:
-    PlanNodeFragment(int stmtCnt = 1);
+    typedef std::map<int, std::vector<AbstractPlanNode*>* >::iterator PlanNodeMapIterator;
+    typedef std::map<int, std::vector<AbstractPlanNode*>* >::const_iterator PlanNodeMapIteratorConst;
+    typedef std::vector<AbstractPlanNode*>::iterator PlanNodeListIterator;
+
+    PlanNodeFragment();
     virtual ~PlanNodeFragment();
 
     // construct a new fragment from the catalog's serialization
@@ -82,20 +84,25 @@ class PlanNodeFragment {
     PlanNodeFragment(AbstractPlanNode *root_node);
     bool constructTree(AbstractPlanNode *node);
 
-    // first node in serialization order
+    // first node from the statement plan
     AbstractPlanNode * getRootNode(int stmtId = 0) {
-        assert(m_stmtPlanNodesArray.get() != NULL && stmtId < m_stmtCnt);
-        return m_stmtPlanNodesArray[stmtId].front();
+        assert(m_stmtExecutionListMap.find(stmtId) != m_stmtExecutionListMap.end());
+        return m_stmtExecutionListMap[stmtId]->front();
     }
 
     // the list of plannodes in execution order for a given sub-statement
-    inline const std::vector<AbstractPlanNode*>& getExecuteList(int stmtId = 0) const {
-        assert(m_stmtExecutionListArray.get() != NULL && stmtId < m_stmtCnt);
-        return m_stmtExecutionListArray[stmtId];
+    PlanNodeMapIteratorConst executeListBegin() const {
+        return m_stmtExecutionListMap.begin();
+    }
+    PlanNodeMapIterator executeListBegin() {
+        return m_stmtExecutionListMap.begin();
     }
 
-    int getStatementCount() const {
-        return m_stmtCnt;
+    PlanNodeMapIteratorConst executeListEnd() const {
+        return m_stmtExecutionListMap.end();
+    }
+    PlanNodeMapIterator executeListEnd() {
+        return m_stmtExecutionListMap.end();
     }
 
     // true if this plan fragment contains a delete plan node.  Used
@@ -120,19 +127,13 @@ class PlanNodeFragment {
 
     // serialized java type: org.voltdb.plannodes.PlanNode[List|Tree]
     std::string m_serializedType;
-    // total number of the statements in the fragment
-    int m_stmtCnt;
     // translate id from catalog to pointer to plannode
     std::map<CatalogId, AbstractPlanNode*> m_idToNodeMap;
-    // pointers to nodes in execution order grouped by substatement
-    // the statement id is an index into the array. The top statement (parent) always has index 0
-    boost::shared_array<std::vector<AbstractPlanNode*> > m_stmtExecutionListArray;
-    // pointers to subqueries nodes in serialization order grouped by substatement
-    // the statement id is an index into the array. The top statement (parent) always has index 0
-    boost::shared_array<std::vector<AbstractPlanNode*> > m_stmtPlanNodesArray;
+    // Pointers to nodes in execution order grouped by substatement
+    // The statement id is the key. The top statement (parent) always has id = 0
+    std::map<int, std::vector<AbstractPlanNode*>* > m_stmtExecutionListMap;
     // Pairs of argument index and type for parameters to the fragment
     std::vector<std::pair< int, voltdb::ValueType> > m_parameters;
-
 };
 
 

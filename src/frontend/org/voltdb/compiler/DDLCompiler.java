@@ -1860,9 +1860,6 @@ public class DDLCompiler {
                         viewName, srcTable.getTypeName());
                 throw m_compiler.new VoltCompilerException(msg);
             }
-            // ENG-451-MERGE
-//            assert(srcTableScan instanceof StmtTargetTableScan);
-//            Table srcTable = ((StmtTargetTableScan)srcTableScan).getTargetTable();
 
             MaterializedViewInfo matviewinfo = srcTable.getViews().add(viewName);
             matviewinfo.setDest(destTable);
