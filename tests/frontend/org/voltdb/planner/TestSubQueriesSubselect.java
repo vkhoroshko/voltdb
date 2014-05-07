@@ -46,7 +46,7 @@ import org.voltdb.plannodes.UnionPlanNode;
 import org.voltdb.types.JoinType;
 import org.voltdb.types.PlanNodeType;
 
-public class TestSubQueries extends PlannerTestCase {
+public class TestSubQueriesSubselect extends PlannerTestCase {
 
     // Supported
 //    public void testUnsupportedSyntax() {
@@ -919,7 +919,7 @@ public class TestSubQueries extends PlannerTestCase {
 
     @Override
     protected void setUp() throws Exception {
-        setupSchema(TestSubQueries.class.getResource("testplans-subqueries-ddl.sql"), "dd", false);
+        setupSchema(TestSubQueriesSubselect.class.getResource("testplans-subqueries-ddl.sql"), "dd", false);
         AbstractPlanNode.enableVerboseExplainForDebugging();
         AbstractExpression.enableVerboseExplainForDebugging();
     }

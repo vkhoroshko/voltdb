@@ -33,13 +33,14 @@ import org.voltdb.expressions.TupleValueExpression;
 import org.voltdb.plannodes.AbstractPlanNode;
 import org.voltdb.plannodes.AbstractScanPlanNode;
 import org.voltdb.plannodes.AggregatePlanNode;
+import org.voltdb.plannodes.NestLoopIndexPlanNode;
 import org.voltdb.plannodes.NestLoopPlanNode;
 import org.voltdb.plannodes.NodeSchema;
 import org.voltdb.plannodes.SchemaColumn;
 import org.voltdb.plannodes.SeqScanPlanNode;
 import org.voltdb.types.ExpressionType;
 
-public class TestPlansInExistsSubQueries extends PlannerTestCase {
+public class TestSubQueriesInExists extends PlannerTestCase {
 
     public void testExistsWithUserParams() {
         AbstractPlanNode pn = compile("select r2.c from r2 where r2.c > ? and exists (select c from r1 where r1.c = r2.c)");
@@ -47,7 +48,7 @@ public class TestPlansInExistsSubQueries extends PlannerTestCase {
         assertTrue(pn instanceof AbstractScanPlanNode);
         AbstractScanPlanNode nps = (AbstractScanPlanNode) pn;
         // Check param indexes
-        AbstractExpression e = ((AbstractScanPlanNode) nps).getPredicate();
+        AbstractExpression e = nps.getPredicate();
         AbstractExpression le = e.getLeft();
         assertEquals(ExpressionType.COMPARE_GREATERTHAN, le.getExpressionType());
         AbstractExpression pve = le.getRight();
@@ -106,13 +107,14 @@ public class TestPlansInExistsSubQueries extends PlannerTestCase {
     public void testExistsJoin() {
         AbstractPlanNode pn = compile("select a from r1,r2 where r1.a = r2.a and " +
                 "exists ( select 1 from r3 where r2.a = r3.a)");
+        System.out.println(pn.toExplainPlanString());
         pn = pn.getChild(0).getChild(0);
-        assertTrue(pn instanceof NestLoopPlanNode);
-        pn = pn.getChild(1);
+        assertTrue(pn instanceof NestLoopIndexPlanNode);
+        pn = pn.getChild(0);
         assertTrue(pn instanceof SeqScanPlanNode);
         AbstractExpression pred = ((SeqScanPlanNode) pn).getPredicate();
-        assertTrue(pred != null);
-        assertTrue(pred instanceof SubqueryExpression);
+//        assertTrue(pred != null);
+//        assertTrue(pred instanceof SubqueryExpression);
     }
 
     public void testInAggeregated() {
@@ -231,7 +233,7 @@ public class TestPlansInExistsSubQueries extends PlannerTestCase {
 
     @Override
     protected void setUp() throws Exception {
-        setupSchema(TestSubQueries.class.getResource("testplans-subqueries-ddl.sql"), "dd", false);
+        setupSchema(TestSubQueriesSubselect.class.getResource("testplans-subqueries-ddl.sql"), "dd", false);
     }
 
 }

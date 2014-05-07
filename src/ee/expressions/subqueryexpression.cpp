@@ -57,7 +57,7 @@ namespace voltdb {
         VOLT_TRACE ("Running subquery: %d", m_subqueryId);
         // Substitute parameters
         if (m_tveParams.get() != NULL) {
-            int paramsCnt = m_tveParams->size();
+            size_t paramsCnt = m_tveParams->size();
             for (int i = 0; i < paramsCnt; ++i) {
                 AbstractExpression* tveParam = (*m_tveParams)[i];
                 NValue param = tveParam->eval(tuple1, tuple2);
