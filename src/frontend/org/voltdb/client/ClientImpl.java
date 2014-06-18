@@ -114,8 +114,11 @@ public final class ClientImpl implements Client, ReplicaProcCaller {
         } else {
             m_passwordHash = Encoder.hexDecode(config.m_password);
         }
-        if (config.m_listener != null) {
-            m_distributer.addClientStatusListener(config.m_listener);
+        for (ClientStatusListenerExt listener : config.m_listeners) {
+            if (listener instanceof ClientAwareListener) {
+                ((ClientAwareListener)listener).setClient(this);
+            }
+            m_distributer.addClientStatusListener(listener);
         }
         assert(config.m_maxOutstandingTxns > 0);
         m_blessedThreadIds.addAll(m_distributer.getThreadIds());

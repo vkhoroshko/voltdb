@@ -17,10 +17,14 @@
 
 package org.voltdb.client;
 
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
 import javax.security.auth.Subject;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
-import java.util.concurrent.TimeUnit;
+
+import com.google_voltpatches.common.collect.ImmutableList;
 
 /**
  * Container for configuration settings for a Client
@@ -33,7 +37,7 @@ public class ClientConfig {
     final String m_username;
     final String m_password;
     final boolean m_cleartext;
-    final ClientStatusListenerExt m_listener;
+    final List<ClientStatusListenerExt> m_listeners;
     boolean m_heavyweight = false;
     int m_maxOutstandingTxns = 3000;
     int m_maxTransactionsPerSecond = Integer.MAX_VALUE;
@@ -49,10 +53,7 @@ public class ClientConfig {
      * work with a server with security disabled. Also specifies no status listener.</p>
      */
     public ClientConfig() {
-        m_username = "";
-        m_password = "";
-        m_listener = null;
-        m_cleartext = true;
+        this(null, null);
     }
 
     /**
@@ -63,7 +64,7 @@ public class ClientConfig {
      * @param password Cleartext password.
      */
     public ClientConfig(String username, String password) {
-        this(username, password, true, (ClientStatusListenerExt) null);
+        this(username, password, true, ImmutableList.<ClientStatusListenerExt>of());
     }
 
     /**
@@ -99,10 +100,36 @@ public class ClientConfig {
      *
      * @param username Cleartext username.
      * @param password A cleartext or hashed passowrd.
-     * @param listener {@link ClientStatusListenerExt} implementation to receive callbacks.
+     * @param listeners a list of {@link ClientStatusListenerExt} implementations to receive callbacks.
      * @param cleartext Whether the password is hashed.
      */
     public ClientConfig(String username, String password, boolean cleartext, ClientStatusListenerExt listener) {
+        this(username, password, cleartext,
+                (listener == null) ? ImmutableList.<ClientStatusListenerExt>of() : ImmutableList.of(listener));
+    }
+
+    /**
+     * <p>Configuration for a client that specifies authentication credentials. The username and
+     * password can be null or the empty string. Also specifies a list of status listeners.</p>
+     *
+     * @param username Cleartext username.
+     * @param password Cleartext password.
+     * @param listener {@link ClientStatusListenerExt} implementation to receive callbacks.
+     */
+    public ClientConfig(String username, String password, List<ClientStatusListenerExt> listeners) {
+        this(username, password, true, listeners);
+    }
+
+    /**
+     * <p>Configuration for a client that specifies authentication credentials. The username and
+     * password can be null or the empty string. Also specifies a list of status listeners.</p>
+     *
+     * @param username Cleartext username.
+     * @param password A cleartext or hashed passowrd.
+     * @param listeners a list of {@link ClientStatusListenerExt} implementations to receive callbacks.
+     * @param cleartext Whether the password is hashed.
+     */
+    public ClientConfig(String username, String password, boolean cleartext, List<ClientStatusListenerExt> listeners) {
         if (username == null) {
             m_username = "";
         } else {
@@ -113,7 +140,7 @@ public class ClientConfig {
         } else {
             m_password = password;
         }
-        m_listener = listener;
+        m_listeners = listeners;
         m_cleartext = cleartext;
     }
 

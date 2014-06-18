@@ -336,6 +336,36 @@ public class TestClientFeatures extends TestCase {
         assertFalse(client.getConnectedHostList().isEmpty());
     }
 
+    /**
+     * Verify a client can reconnect automatically if {link ReconnectStatusListener} is registered.
+     */
+    public void testAutoReconnect() throws Exception {
+        ClientConfig config = new ClientConfig(null, null, true, new ReconnectStatusListener(1000, 3000));
+        Client client = ClientFactory.createClient(config);
+        client.createConnection("localhost");
+
+        tearDown();
+
+        for (int i = 0; (i < 40) && (client.getConnectedHostList().size() > 0); i++) {
+            Thread.sleep(500);
+        }
+        assertTrue(client.getConnectedHostList().isEmpty());
+
+        // sleep before server restart to force some reconnect failures
+        Thread.sleep(2000);
+
+        setUp();
+
+        for (int i = 0; i < 40; i++) {
+            if (client.getConnectedHostList().size() > 0) {
+                return;
+            }
+            Thread.sleep(500);
+        }
+
+        fail("Client should have been reconnected");
+    }
+
     public void testGetAddressList() throws UnknownHostException, IOException, InterruptedException {
         CSL csl = new CSL();
 
